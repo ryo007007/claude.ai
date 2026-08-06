@@ -1,0 +1,13 @@
+# MQL5 Compiled binaries
+*.ex5
+*.ex4
+
+# MetaEditor Log & Temporary files
+*.log
+*.ini
+*.tmpl
+
+# Cursor / OS generated files
+.cursor/
+.DS_Store
+Thumbs.db
