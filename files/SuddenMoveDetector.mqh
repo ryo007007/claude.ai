@@ -20,10 +20,10 @@
 //--- パラメータ(必要に応じてメインファイル側でoverride可能)
 input group "=== 急変検知モジュール設定 ==="
 input int      SMD_ATR_Period        = 14;     // ATR計算期間
-input double   SMD_ATR_SpikeMult     = 3.5;    // ATRスパイク判定倍率(直近バーレンジ/平均ATR)
+input double   SMD_ATR_SpikeMult     = 3.0;    // ATRスパイク判定倍率(直近バーレンジ/平均ATR)
 input int      SMD_ROC_Period        = 5;      // ROC計算期間(本数)
 input int      SMD_ROC_ZLookback     = 50;     // ROC平均・標準偏差算出用の過去本数
-input double   SMD_ROC_ZThreshold    = 5.0;    // ROC Zスコア閾値(標準偏差の何倍で急変とみなすか)
+input double   SMD_ROC_ZThreshold    = 4.0;    // ROC Zスコア閾値(標準偏差の何倍で急変とみなすか)
 input int      SMD_MinAlignedPairs   = 3;      // 何ペア同時検知でリスクオフ/オン確定とみなすか
 input bool     SMD_OnlyJPYCrosses    = true;   // JPYクロスのみを対象にするか
 
