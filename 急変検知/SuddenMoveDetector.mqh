@@ -23,7 +23,7 @@ input int      SMD_ATR_Period        = 14;     // ATR計算期間
 input double   SMD_ATR_SpikeMult     = 2.5;    // ATRスパイク判定倍率(直近バーレンジ/平均ATR)
 input int      SMD_ROC_Period        = 5;      // ROC計算期間(本数)
 input int      SMD_ROC_ZLookback     = 50;     // ROC平均・標準偏差算出用の過去本数
-input double   SMD_ROC_ZThreshold    = 3.5;    // ROC Zスコア閾値(標準偏差の何倍で急変とみなすか)
+input double   SMD_ROC_ZThreshold    = 2.0;    // ROC Zスコア閾値(標準偏差の何倍で急変とみなすか)
 input int      SMD_MinAlignedPairs   = 3;      // 何ペア同時検知でリスクオフ/オン確定とみなすか
 input bool     SMD_OnlyJPYCrosses    = true;   // JPYクロスのみを対象にするか
 
@@ -31,11 +31,14 @@ input bool     SMD_OnlyJPYCrosses    = true;   // JPYクロスのみを対象に
 struct SMD_SymbolState
   {
    string   symbol;
+   int      atrHandle;       // iATRハンドル(Init時に1回だけ作成)
    double   atrCurrent;      // 直近バーのレンジ(High-Low)
    double   atrAverage;      // 平均ATR
    double   atrRatio;        // atrCurrent / atrAverage
    double   rocZScore;       // ROCのZスコア
-   bool     isSpike;         // ATR基準で急変フラグ
+   bool     atrSpike;        // ATR基準の急変フラグ
+   bool     rocSpike;        // ROC基準の急変フラグ
+   bool     isSpike;         // 最終判定(ATR かつ ROC の両方を満たす場合のみtrue)
    bool     isDirUp;         // 急変の方向(true=上昇, false=下落)
    datetime lastAlertTime;   // 直近アラート時刻(連発防止用)
   };
@@ -59,14 +62,35 @@ bool SMD_Init(const string &symbols[], const int count, const ENUM_TIMEFRAMES tf
       g_SMD_States[i].atrAverage   = 0.0;
       g_SMD_States[i].atrRatio     = 0.0;
       g_SMD_States[i].rocZScore    = 0.0;
+      g_SMD_States[i].atrSpike     = false;
+      g_SMD_States[i].rocSpike     = false;
       g_SMD_States[i].isSpike      = false;
       g_SMD_States[i].isDirUp      = false;
       g_SMD_States[i].lastAlertTime = 0;
 
       if(!SymbolSelect(symbols[i], true))
          PrintFormat("SMD_Init: シンボル選択失敗 %s", symbols[i]);
+
+      //--- ハンドルはここで1回だけ作成する(毎ティック作成すると計算が
+      //--- 間に合わずATR比が常に0になるバグの原因になるため)
+      g_SMD_States[i].atrHandle = iATR(symbols[i], tf, SMD_ATR_Period);
+      if(g_SMD_States[i].atrHandle == INVALID_HANDLE)
+         PrintFormat("SMD_Init: iATRハンドル作成失敗 %s", symbols[i]);
      }
    return true;
+  }
+
+//+------------------------------------------------------------------+
+//| 終了処理: 作成したインジケーターハンドルを解放する。               |
+//| OnDeinit() から必ず呼び出すこと(呼ばないとハンドルリークする)     |
+//+------------------------------------------------------------------+
+void SMD_Deinit()
+  {
+   for(int i = 0; i < g_SMD_Count; i++)
+     {
+      if(g_SMD_States[i].atrHandle != INVALID_HANDLE)
+         IndicatorRelease(g_SMD_States[i].atrHandle);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -74,20 +98,17 @@ bool SMD_Init(const string &symbols[], const int count, const ENUM_TIMEFRAMES tf
 //+------------------------------------------------------------------+
 bool SMD_CalcSymbol(SMD_SymbolState &st)
   {
-   //--- ATR(直近バーのレンジ vs 平均ATR)
-   int atrHandle = iATR(st.symbol, g_SMD_TF, SMD_ATR_Period);
-   if(atrHandle == INVALID_HANDLE)
+   //--- ATR(直近バーのレンジ vs 平均ATR)。ハンドルはSMD_Initで作成済みのものを使う。
+   //--- 毎回作成/破棄すると計算が間に合わずATR比が常に0になるので注意。
+   if(st.atrHandle == INVALID_HANDLE)
       return false;
 
    double atrBuf[];
    ArraySetAsSeries(atrBuf, true);
-   if(CopyBuffer(atrHandle, 0, 1, 1, atrBuf) <= 0)
-     {
-      IndicatorRelease(atrHandle);
-      return false;
-     }
+   if(CopyBuffer(st.atrHandle, 0, 1, 1, atrBuf) <= 0)
+      return false;  // まだ計算が済んでいない場合はスキップ(次のティックで再試行)
+
    st.atrAverage = atrBuf[0];
-   IndicatorRelease(atrHandle);
 
    double high1 = iHigh(st.symbol, g_SMD_TF, 0);
    double low1  = iLow(st.symbol, g_SMD_TF, 0);
@@ -98,7 +119,7 @@ bool SMD_CalcSymbol(SMD_SymbolState &st)
    else
       st.atrRatio = 0.0;
 
-   st.isSpike = (st.atrRatio >= SMD_ATR_SpikeMult);
+   st.atrSpike = (st.atrRatio >= SMD_ATR_SpikeMult);
 
    //--- ROCのZスコア(過去SMD_ROC_ZLookback本のROC分布に対して現在のROCが何σか)
    double closeBuf[];
@@ -131,10 +152,11 @@ bool SMD_CalcSymbol(SMD_SymbolState &st)
    double currentROC = rocArr[0];
    st.rocZScore = (stdev > 0) ? (currentROC - mean) / stdev : 0.0;
    st.isDirUp = (currentROC > 0);
+   st.rocSpike = (MathAbs(st.rocZScore) >= SMD_ROC_ZThreshold);
 
-   //--- ROC基準でも急変フラグをOR条件で立てる
-   if(MathAbs(st.rocZScore) >= SMD_ROC_ZThreshold)
-      st.isSpike = true;
+   //--- 最終判定: ATRとROCの両方を満たす場合のみ「急変」とする(AND条件)。
+   //--- どちらか一方だけだと、通常のセッション内値動きでも頻繁にヒットしてしまう。
+   st.isSpike = st.atrSpike && st.rocSpike;
 
    return true;
   }
