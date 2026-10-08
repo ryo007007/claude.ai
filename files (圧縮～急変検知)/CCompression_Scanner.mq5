@@ -36,6 +36,12 @@ input int  MaxRows          = 40;   // 最大表示行数
 input int  RefreshSeconds   = 1;    // 再計算の最小間隔(秒)
 input bool OpenInNewChart   = false; // trueなら新規チャート、falseなら現在のチャートを切替
 
+input group "=== 解説パネル(現在のチャートの通貨・時間足) ==="
+input bool ShowDetailPanel = true;               // 解説パネルを表示する
+input ENUM_BASE_CORNER DetailCorner = CORNER_LEFT_LOWER; // 表示する隅
+input int  DetailX         = 10;                 // 隅からのX距離
+input int  DetailY         = 20;                 // 隅からのY距離
+
 input group "=== 表示する最低状態 ==="
 input bool ShowCompression       = true; // COMPRESSION以上を表示
 input bool ShowOnlyStrongOrAbove = false; // trueならSTRONG COMPRESSION以上のみ表示
@@ -68,6 +74,8 @@ bool            g_spikeUp[];      // 急変の方向(true=上昇)
 double          g_spikeRatio[];   // 急変検知時のATR比
 double          g_spikeZ[];       // 急変検知時のROC Zスコア
 bool            g_suppressed[];   // 急変で圧縮表示を解除済み(圧縮がNORMALに戻るまで非表示)
+
+void DrawDetailPanel();   // 解説パネル描画(定義はファイル末尾)
 
 //+------------------------------------------------------------------+
 int ParseSymbols(string src, string &outArr[])
@@ -380,6 +388,8 @@ void UpdateAndDraw()
    else
       ObjectDelete(0, "CCOMP_Scan_More");
 
+   DrawDetailPanel();
+
    ChartRedraw(0);
   }
 
@@ -426,5 +436,184 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       bool ok = ChartSetSymbolPeriod(0, sym, tf);
       if(!ok) Print("通貨ペア/時間足の切り替えに失敗しました: ", sym, " ", EnumToString(tf));
      }
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| 解説パネル                                                         |
+//| チャートに表示中の(通貨ペア, 時間足)について、各指標の状態を       |
+//| 日本語で解説する。行クリックで切り替えた直後もこの内容が表示される  |
+//+------------------------------------------------------------------+
+string GetATRExplanation(const int score)
+  {
+   if(score >= 2) return("1本の値動き：かなり小さい");
+   if(score == 1) return("1本の値動き：やや小さい");
+   return("1本の値動き：通常～大きめ");
+  }
+
+string GetBBExplanation(const int score)
+  {
+   if(score >= 2) return("価格の広がり：かなり狭い");
+   if(score == 1) return("価格の広がり：やや狭い");
+   return("価格の広がり：通常～大きい");
+  }
+
+string GetRangeExplanation(const int score)
+  {
+   if(score >= 2) return("20期間の活動範囲：かなり狭い");
+   if(score == 1) return("20期間の活動範囲：やや狭い");
+   return("20期間の活動範囲：通常～大きい");
+  }
+
+string GetADXExplanation(const int score)
+  {
+   if(score >= 2) return("トレンド強度：弱い");
+   if(score == 1) return("トレンド強度：やや弱い");
+   return("トレンド強度：強め");
+  }
+
+string GetStateExplanation(const CCOMP_STATE st)
+  {
+   switch(st)
+     {
+      case CCOMP_NORMAL:             return("通常の値動きです。圧縮は見られません");
+      case CCOMP_COMPRESSION:        return("値動きが縮み始めています（弱い圧縮）");
+      case CCOMP_STRONG_COMPRESSION: return("値動きがかなり縮んでいます（強い圧縮）");
+      case CCOMP_TIGHT_COMPRESSION:  return("値動きが極めて縮んでいます（非常に強い圧縮）");
+      case CCOMP_TRANSITION:         return("強い圧縮から値幅が広がり始めました（方向は不明）");
+     }
+   return("");
+  }
+
+string GetDeltaExplanation(const int delta)
+  {
+   if(delta > 0) return("前回よりScoreが上がり、圧縮が強まっています");
+   if(delta < 0) return("前回よりScoreが下がり、圧縮が弱まっています");
+   return("前回からScoreの変化はありません");
+  }
+
+int g_detailLineCount = 0;   // 前回描画した解説行数(余った行を消すため)
+
+//--- 解説1行を描画。j=上から何行目か、total=全行数
+void SetDetailLine(const int j, const int total, const string text, const color clr)
+  {
+   string name = "CCOMP_Scan_Detail_" + IntegerToString(j);
+   bool lower = (DetailCorner == CORNER_LEFT_LOWER  || DetailCorner == CORNER_RIGHT_LOWER);
+   bool right = (DetailCorner == CORNER_RIGHT_UPPER || DetailCorner == CORNER_RIGHT_LOWER);
+
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+      ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_BACK, false);
+     }
+
+   ENUM_ANCHOR_POINT anchor;
+   if(lower) anchor = right ? ANCHOR_RIGHT_LOWER : ANCHOR_LEFT_LOWER;
+   else      anchor = right ? ANCHOR_RIGHT_UPPER : ANCHOR_LEFT_UPPER;
+
+   int lineH = 16;
+   int y = lower ? DetailY + (total - 1 - j) * lineH : DetailY + j * lineH;
+
+   ObjectSetInteger(0, name, OBJPROP_CORNER, DetailCorner);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, DetailX);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+  }
+
+void DrawDetailPanel()
+  {
+   if(!ShowDetailPanel)
+     {
+      ObjectsDeleteAll(0, "CCOMP_Scan_Detail_");
+      g_detailLineCount = 0;
+      return;
+     }
+
+   string lines[16];
+   color  clrs[16];
+   int    L = 0;
+
+   ENUM_TIMEFRAMES curTF = (ENUM_TIMEFRAMES)_Period;
+   string tfName = EnumToString(curTF);
+   StringReplace(tfName, "PERIOD_", "");
+
+   int idx = -1;
+   for(int i = 0; i < g_scanTotal; i++)
+      if(g_scan[i].symbol == _Symbol && g_scan[i].tf == curTF) { idx = i; break; }
+
+   if(idx < 0)
+     {
+      lines[L] = StringFormat("【解説】%s %s は監視対象外です（時間足の選択ONを確認してください）", _Symbol, tfName);
+      clrs[L]  = clrGray; L++;
+     }
+   else if(!g_scan[idx].ready)
+     {
+      lines[L] = StringFormat("【解説】%s %s 計算中...", _Symbol, tfName);
+      clrs[L]  = clrGray; L++;
+     }
+   else
+     {
+      CCOMP_Instance inst = g_scan[idx];
+      color base = clrSilver;
+
+      lines[L] = StringFormat("【解説】%s %s   状態: %s   Score %d/8",
+                              inst.symbol, tfName, CCOMP_StateText(inst.state), inst.score);
+      clrs[L]  = CCOMP_StateColor(inst.state); L++;
+
+      lines[L] = "  " + GetStateExplanation(inst.state);
+      clrs[L]  = base; L++;
+
+      lines[L] = StringFormat("  ATR    %d/2  %s  (ATR%% %.3f / 過去%d本中 下位%.0f%%)",
+                              inst.atrScore, GetATRExplanation(inst.atrScore),
+                              inst.atrPct, inst.lookback, inst.atrPctile);
+      clrs[L]  = base; L++;
+
+      lines[L] = StringFormat("  BB幅   %d/2  %s  (BB幅%% %.3f / 過去%d本中 下位%.0f%%)",
+                              inst.bbScore, GetBBExplanation(inst.bbScore),
+                              inst.bbWidthPct, inst.lookback, inst.bbPctile);
+      clrs[L]  = base; L++;
+
+      lines[L] = StringFormat("  Range  %d/2  %s  (Range%% %.3f / 過去%d本中 下位%.0f%%)",
+                              inst.rangeScore, GetRangeExplanation(inst.rangeScore),
+                              inst.range20Pct, inst.lookback, inst.rangePctile);
+      clrs[L]  = base; L++;
+
+      lines[L] = StringFormat("  ADX    %d/2  %s  (ADX %.1f)",
+                              inst.adxScore, GetADXExplanation(inst.adxScore), inst.adxValue);
+      clrs[L]  = base; L++;
+
+      lines[L] = StringFormat("  Delta %+d : %s", inst.delta, GetDeltaExplanation(inst.delta));
+      clrs[L]  = base; L++;
+
+      lines[L] = StringFormat("  Age %d : 同じ状態が%d本続いています（%s足の確定足ベース）",
+                              inst.age, inst.age, tfName);
+      clrs[L]  = base; L++;
+
+      // 急変との連携状況
+      if(UseSpikeOverride && TimeCurrent() < g_spikeUntil[idx])
+        {
+         lines[L] = StringFormat("  急変検知中: %s  ATR比%.1f Z%+.1f  （一覧では圧縮表示を解除し急変として表示）",
+                                 g_spikeUp[idx] ? "上昇" : "下落", g_spikeRatio[idx], g_spikeZ[idx]);
+         clrs[L]  = g_spikeUp[idx] ? SpikeUpColor : SpikeDownColor; L++;
+        }
+      else if(UseSpikeOverride && g_suppressed[idx])
+        {
+         lines[L] = "  急変により圧縮表示を解除中（圧縮がNORMALに戻るまで一覧には出ません）";
+         clrs[L]  = clrGray; L++;
+        }
+     }
+
+   for(int j = 0; j < L; j++)
+      SetDetailLine(j, L, lines[j], clrs[j]);
+
+   // 前回より行数が減った場合、余った行を消す
+   for(int j = L; j < g_detailLineCount; j++)
+      ObjectDelete(0, "CCOMP_Scan_Detail_" + IntegerToString(j));
+   g_detailLineCount = L;
   }
 //+------------------------------------------------------------------+
