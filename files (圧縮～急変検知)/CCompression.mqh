@@ -30,6 +30,7 @@ input int CCOMP_ATR_Period    = 14;   // ATR期間
 input int CCOMP_BB_Period     = 20;   // ボリンジャーバンド期間
 input double CCOMP_BB_Dev     = 2.0;  // ボリンジャーバンド偏差
 input int CCOMP_ADX_Period    = 14;   // ADX期間
+input int CCOMP_ReplayBars    = 200;  // 状態遷移(TRANSITION/Age)を過去から再現する本数
 
 //--- 状態定義
 enum CCOMP_STATE
@@ -147,6 +148,16 @@ double CCOMP_Percentile(const double &histArr[], const int n, const double curre
    return (double)countLE / (double)n * 100.0;
   }
 
+//--- 配列の start から n 個を過去分布として、currentVal のパーセンタイルを返す
+double CCOMP_PercentileRange(const double &arr[], const int start, const int n, const double currentVal)
+  {
+   if(n <= 0) return 50.0;
+   int countLE = 0;
+   for(int i = 0; i < n; i++)
+      if(arr[start + i] <= currentVal) countLE++;
+   return (double)countLE / (double)n * 100.0;
+  }
+
 //--- スコアテーブル(仕様書 Section 3-6)
 int CCOMP_ScoreATR(const double pct)
   { if(pct <= 20.0) return 2; if(pct <= 35.0) return 1; return 0; }
@@ -207,120 +218,123 @@ bool CCOMP_UpdateInstance(CCOMP_Instance &inst)
    if(barTime == inst.lastBarTime)
       return false; // 新しい確定足がまだ無い
 
+   //--- 前回の状態を覚えておく方式はやめ、毎回、過去CCOMP_ReplayBars本分の
+   //--- 状態遷移を再現して最新の状態を求める(ステートレス方式)。
+   //--- こうすると、チャート切替等でインジケーターが読み込み直されても
+   //--- TRANSITIONやDelta/Ageが失われない。
    int lb = inst.lookback;
-   int needBase = lb + 1; // 現在値1 + 過去lb個
+   int rp = CCOMP_RangePeriod;
 
-   //--- ATR% ---
-   double atrBuf[], closeBuf[];
-   ArraySetAsSeries(atrBuf, true);
+   //--- 取得できる履歴本数に合わせて、再現する本数Rを決める
+   int wantBars = lb + 1 + CCOMP_ReplayBars + (rp - 1);
+   double closeBuf[];
    ArraySetAsSeries(closeBuf, true);
-   if(CopyBuffer(inst.atrHandle, 0, 1, needBase, atrBuf) < needBase) return false;
-   if(CopyClose(inst.symbol, inst.tf, 1, needBase, closeBuf) < needBase) return false;
+   int gotC = CopyClose(inst.symbol, inst.tf, 1, wantBars, closeBuf);
+   if(gotC <= 0) return false;
 
-   double atrPctArr[];
-   ArrayResize(atrPctArr, needBase);
-   for(int i = 0; i < needBase; i++)
-      atrPctArr[i] = (closeBuf[i] != 0.0) ? atrBuf[i] / closeBuf[i] * 100.0 : 0.0;
+   int R = MathMin(CCOMP_ReplayBars, gotC - (lb + rp));
+   if(R < 0) return false;
 
-   double curATRPct = atrPctArr[0];
-   double histATR[];
-   ArrayResize(histATR, lb);
-   for(int i = 0; i < lb; i++) histATR[i] = atrPctArr[i + 1];
-   double atrPercentile = CCOMP_Percentile(histATR, lb, curATRPct);
-   int atrScore = CCOMP_ScoreATR(atrPercentile);
+   int nPts = lb + 1 + R;        // 判定に使う点数(index0=最新確定足 ... 最古=nPts-1)
+   int nRaw = nPts + (rp - 1);   // Range20計算に必要な生の本数
 
-   //--- BB Width% ---
-   double upBuf[], loBuf[], midBuf[];
+   //--- ATR / BB / 高値安値 / ADX を取得 ---
+   double atrBuf[], upBuf[], loBuf[], midBuf[], highRaw[], lowRaw[], adxBuf[];
+   ArraySetAsSeries(atrBuf, true);
    ArraySetAsSeries(upBuf, true);
    ArraySetAsSeries(loBuf, true);
    ArraySetAsSeries(midBuf, true);
-   if(CopyBuffer(inst.bbHandle, UPPER_BAND, 1, needBase, upBuf)  < needBase) return false;
-   if(CopyBuffer(inst.bbHandle, LOWER_BAND, 1, needBase, loBuf)  < needBase) return false;
-   if(CopyBuffer(inst.bbHandle, BASE_LINE,  1, needBase, midBuf) < needBase) return false;
-
-   double bbPctArr[];
-   ArrayResize(bbPctArr, needBase);
-   for(int i = 0; i < needBase; i++)
-      bbPctArr[i] = (midBuf[i] != 0.0) ? (upBuf[i] - loBuf[i]) / midBuf[i] * 100.0 : 0.0;
-
-   double curBBWidthPct = bbPctArr[0];
-   double histBB[];
-   ArrayResize(histBB, lb);
-   for(int i = 0; i < lb; i++) histBB[i] = bbPctArr[i + 1];
-   double bbPercentile = CCOMP_Percentile(histBB, lb, curBBWidthPct);
-   int bbScore = CCOMP_ScoreBB(bbPercentile);
-
-   //--- Range20% ---
-   int rp = CCOMP_RangePeriod;
-   int rangeNeed = needBase + (rp - 1);
-   double highRaw[], lowRaw[];
    ArraySetAsSeries(highRaw, true);
    ArraySetAsSeries(lowRaw, true);
-   if(CopyHigh(inst.symbol, inst.tf, 1, rangeNeed, highRaw) < rangeNeed) return false;
-   if(CopyLow(inst.symbol, inst.tf, 1, rangeNeed, lowRaw)   < rangeNeed) return false;
+   ArraySetAsSeries(adxBuf, true);
 
-   double rangePctArr[];
-   ArrayResize(rangePctArr, needBase);
-   for(int j = 0; j < needBase; j++)
+   if(CopyBuffer(inst.atrHandle, 0, 1, nPts, atrBuf) < nPts) return false;
+   if(CopyBuffer(inst.bbHandle, UPPER_BAND, 1, nPts, upBuf)  < nPts) return false;
+   if(CopyBuffer(inst.bbHandle, LOWER_BAND, 1, nPts, loBuf)  < nPts) return false;
+   if(CopyBuffer(inst.bbHandle, BASE_LINE,  1, nPts, midBuf) < nPts) return false;
+   if(CopyHigh(inst.symbol, inst.tf, 1, nRaw, highRaw) < nRaw) return false;
+   if(CopyLow(inst.symbol, inst.tf, 1, nRaw, lowRaw)   < nRaw) return false;
+   if(CopyBuffer(inst.adxHandle, 0, 1, R + 1, adxBuf) < R + 1) return false;
+
+   //--- 各足の ATR% / BB幅% / Range20% を算出 ---
+   double atrPctArr[], bbPctArr[], rangePctArr[];
+   ArrayResize(atrPctArr, nPts);
+   ArrayResize(bbPctArr, nPts);
+   ArrayResize(rangePctArr, nPts);
+   for(int j = 0; j < nPts; j++)
      {
+      double c = closeBuf[j];
+      atrPctArr[j] = (c != 0.0) ? atrBuf[j] / c * 100.0 : 0.0;
+      bbPctArr[j]  = (midBuf[j] != 0.0) ? (upBuf[j] - loBuf[j]) / midBuf[j] * 100.0 : 0.0;
+
       double hh = highRaw[j];
       double ll = lowRaw[j];
-      for(int k = 1; k < rp; k++)
+      for(int m = 1; m < rp; m++)
         {
-         if(highRaw[j + k] > hh) hh = highRaw[j + k];
-         if(lowRaw[j + k]  < ll) ll = lowRaw[j + k];
+         if(highRaw[j + m] > hh) hh = highRaw[j + m];
+         if(lowRaw[j + m]  < ll) ll = lowRaw[j + m];
         }
-      rangePctArr[j] = (closeBuf[j] != 0.0) ? (hh - ll) / closeBuf[j] * 100.0 : 0.0;
+      rangePctArr[j] = (c != 0.0) ? (hh - ll) / c * 100.0 : 0.0;
      }
 
-   double curRange20Pct = rangePctArr[0];
-   double histRange[];
-   ArrayResize(histRange, lb);
-   for(int i = 0; i < lb; i++) histRange[i] = rangePctArr[i + 1];
-   double rangePercentile = CCOMP_Percentile(histRange, lb, curRange20Pct);
-   int rangeScore = CCOMP_ScoreRange(rangePercentile);
+   //--- 過去(古い足)から最新の確定足へ向かって状態遷移を再現 ---
+   CCOMP_STATE prevState = CCOMP_NORMAL;
+   int  prevScore = -1;   // -1 = 比較対象なし(再現の最初の足)
+   int  age       = 1;
+   int  delta     = 0;
+   int  total = 0, sA = 0, sB = 0, sR = 0, sX = 0;
+   double pcA = 0.0, pcB = 0.0, pcR = 0.0;
+   CCOMP_STATE st = CCOMP_NORMAL;
 
-   //--- ADX(絶対値) ---
-   double adxBuf[];
-   ArraySetAsSeries(adxBuf, true);
-   if(CopyBuffer(inst.adxHandle, 0, 1, 1, adxBuf) < 1) return false;
-   double curADX = adxBuf[0];
-   int adxScore = CCOMP_ScoreADX(curADX);
+   for(int k = R; k >= 0; k--)
+     {
+      // 足kの値を、その1本前から lb 本分の過去分布と比較(k+1 ～ k+lb)
+      pcA = CCOMP_PercentileRange(atrPctArr,   k + 1, lb, atrPctArr[k]);
+      pcB = CCOMP_PercentileRange(bbPctArr,    k + 1, lb, bbPctArr[k]);
+      pcR = CCOMP_PercentileRange(rangePctArr, k + 1, lb, rangePctArr[k]);
 
-   //--- 合計スコア・状態 ---
-   int totalScore = atrScore + bbScore + rangeScore + adxScore;
-   CCOMP_STATE baseState = CCOMP_StateFromScore(totalScore);
+      sA = CCOMP_ScoreATR(pcA);
+      sB = CCOMP_ScoreBB(pcB);
+      sR = CCOMP_ScoreRange(pcR);
+      sX = CCOMP_ScoreADX(adxBuf[k]);
+      total = sA + sB + sR + sX;
 
-   //--- TRANSITION判定(仕様書 Section 9: 条件A・B・Cすべて満たす場合のみ) ---
-   bool condA = (inst.prevState == CCOMP_STRONG_COMPRESSION || inst.prevState == CCOMP_TIGHT_COMPRESSION);
-   bool condB = (totalScore < inst.prevScore);
-   bool condC = (curATRPct > inst.prevATRPct) || (curBBWidthPct > inst.prevBBWidthPct);
-   CCOMP_STATE finalState = (condA && condB && condC) ? CCOMP_TRANSITION : baseState;
+      CCOMP_STATE baseState = CCOMP_StateFromScore(total);
 
-   //--- Delta / Age ---
-   inst.delta = totalScore - inst.prevScore;
-   inst.age   = (finalState == inst.prevState) ? inst.age + 1 : 1;
+      //--- TRANSITION判定(仕様書 Section 9: 条件A・B・Cすべて満たす場合のみ) ---
+      bool condA = (prevState == CCOMP_STRONG_COMPRESSION || prevState == CCOMP_TIGHT_COMPRESSION);
+      bool condB = (prevScore >= 0 && total < prevScore);
+      bool condC = (atrPctArr[k] > atrPctArr[k + 1]) || (bbPctArr[k] > bbPctArr[k + 1]);
+      st = (condA && condB && condC) ? CCOMP_TRANSITION : baseState;
 
-   //--- 値を保存 ---
-   inst.atrPct      = curATRPct;
-   inst.bbWidthPct  = curBBWidthPct;
-   inst.range20Pct  = curRange20Pct;
-   inst.adxValue    = curADX;
-   inst.atrPctile   = atrPercentile;
-   inst.bbPctile    = bbPercentile;
-   inst.rangePctile = rangePercentile;
-   inst.atrScore    = atrScore;
-   inst.bbScore     = bbScore;
-   inst.rangeScore  = rangeScore;
-   inst.adxScore    = adxScore;
-   inst.score       = totalScore;
-   inst.state       = finalState;
+      delta = (prevScore >= 0) ? (total - prevScore) : 0;
+      age   = (k == R) ? 1 : ((st == prevState) ? age + 1 : 1);
 
-   //--- 次回比較用に保存 ---
-   inst.prevScore      = totalScore;
-   inst.prevATRPct     = curATRPct;
-   inst.prevBBWidthPct = curBBWidthPct;
-   inst.prevState      = finalState;
+      prevScore = total;
+      prevState = st;
+     }
+
+   //--- 最新の確定足(k=0)の結果を保存 ---
+   inst.atrPct      = atrPctArr[0];
+   inst.bbWidthPct  = bbPctArr[0];
+   inst.range20Pct  = rangePctArr[0];
+   inst.adxValue    = adxBuf[0];
+   inst.atrPctile   = pcA;
+   inst.bbPctile    = pcB;
+   inst.rangePctile = pcR;
+   inst.atrScore    = sA;
+   inst.bbScore     = sB;
+   inst.rangeScore  = sR;
+   inst.adxScore    = sX;
+   inst.score       = total;
+   inst.state       = st;
+   inst.delta       = delta;
+   inst.age         = age;
+
+   inst.prevScore      = total;
+   inst.prevATRPct     = atrPctArr[0];
+   inst.prevBBWidthPct = bbPctArr[0];
+   inst.prevState      = st;
 
    inst.lastBarTime = barTime;
    inst.ready = true;

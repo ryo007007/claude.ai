@@ -110,6 +110,64 @@ color CCOMP_StateColor(const CCOMP_STATE st)
   }
 
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| 急変状態の保存・復元                                               |
+//| 行クリックでチャートの通貨/時間足が変わるとインジケーターが         |
+//| 読み込み直されるため、急変の保持状態を端末のグローバル変数に        |
+//| 保存して引き継ぐ。                                                 |
+//+------------------------------------------------------------------+
+string GVKey(const int i, const string field)
+  {
+   return "CCOMP_" + field + "_" + g_scan[i].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[i].tf));
+  }
+
+void SaveSpikeState(const int i)
+  {
+   GlobalVariableSet(GVKey(i, "SU"), (double)g_spikeUntil[i]);
+   GlobalVariableSet(GVKey(i, "SD"), g_spikeUp[i] ? 1.0 : 0.0);
+   GlobalVariableSet(GVKey(i, "SR"), g_spikeRatio[i]);
+   GlobalVariableSet(GVKey(i, "SZ"), g_spikeZ[i]);
+  }
+
+void SaveSuppressed(const int i, const bool on)
+  {
+   string k = GVKey(i, "SP");
+   if(on)
+      GlobalVariableSet(k, 1.0);
+   else if(GlobalVariableCheck(k))
+      GlobalVariableDel(k);
+  }
+
+void LoadSpikeStates()
+  {
+   datetime now = TimeCurrent();
+   for(int i = 0; i < g_scanTotal; i++)
+     {
+      string ku = GVKey(i, "SU");
+      if(GlobalVariableCheck(ku))
+        {
+         datetime until = (datetime)(long)GlobalVariableGet(ku);
+         if(until > now)
+           {
+            g_spikeUntil[i] = until;
+            g_spikeUp[i]    = (GlobalVariableGet(GVKey(i, "SD")) > 0.5);
+            g_spikeRatio[i] = GlobalVariableGet(GVKey(i, "SR"));
+            g_spikeZ[i]     = GlobalVariableGet(GVKey(i, "SZ"));
+           }
+         else
+           {
+            // 期限切れは削除
+            GlobalVariableDel(ku);
+            GlobalVariableDel(GVKey(i, "SD"));
+            GlobalVariableDel(GVKey(i, "SR"));
+            GlobalVariableDel(GVKey(i, "SZ"));
+           }
+        }
+      if(GlobalVariableCheck(GVKey(i, "SP")))
+         g_suppressed[i] = true;
+     }
+  }
+
 int OnInit()
   {
    g_symbolCount = ParseSymbols(InpSymbols, g_symbols);
@@ -158,6 +216,8 @@ int OnInit()
          if(!CCOMP_InitInstance(g_scan[idx], g_symbols[si], g_tfList[ti]))
             PrintFormat("初期化失敗: %s %s", g_symbols[si], EnumToString(g_tfList[ti]));
         }
+
+   LoadSpikeStates();   // チャート切替で読み込み直された場合に急変状態を引き継ぐ
 
    EventSetTimer(MathMax(1, RefreshSeconds));
    return(INIT_SUCCEEDED);
@@ -225,7 +285,10 @@ void UpdateAndDraw()
 
          // 圧縮が一度NORMALに戻ったら抑制を解除(次に圧縮が再形成されたら再び表示する)
          if(g_suppressed[i] && g_scan[i].state == CCOMP_NORMAL)
+           {
             g_suppressed[i] = false;
+            SaveSuppressed(i, false);
+           }
 
          if(g_scan[i].state == CCOMP_NORMAL && !SpikeShowAlways) continue;
 
@@ -241,8 +304,12 @@ void UpdateAndDraw()
             g_spikeRatio[i] = ratio;
             g_spikeZ[i]     = z;
             // 圧縮中だった行は、急変で圧縮表示を解除(NORMALに戻るまで圧縮としては出さない)
+            SaveSpikeState(i);
             if(g_scan[i].state != CCOMP_NORMAL)
+              {
                g_suppressed[i] = true;
+               SaveSuppressed(i, true);
+              }
            }
         }
      }
