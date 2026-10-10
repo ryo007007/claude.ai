@@ -11,3 +11,11 @@
 .cursor/
 .DS_Store
 Thumbs.db
+
+# すべてのExcelワークシートを除外する
+*.xls
+*.xlsx
+*.xlsm
+
+# MacやExcelが自動生成する一時ファイル（~$で始まるファイル）も除外する
+~$*.xls*
