@@ -10,6 +10,12 @@
 //|          MQL5/Files/<SLG_Folder>/CCOMP_results.csv                |
 //|  (CSVなのでExcelで開いて集計できる)                               |
 //|                                                                    |
+//|  【重要】MQL5のプログラムは MQL5/Files の外には書き込めない。      |
+//|  既定の保存先 "Verification log" を                               |
+//|  MQL5/Indicators/claude.ai/Verification log に置くには、           |
+//|  MQL5/Files/Verification log からのジャンクション(mklink /J)を     |
+//|  先に作っておく(手順は README を参照)。                           |
+//|                                                                    |
 //|  評価は1分足データで行うため、チャートを閉じていても次回起動時に    |
 //|  未評価の分をまとめて評価する(再起動・チャート切替に強い)。        |
 //|                                                                    |
@@ -19,10 +25,10 @@
 #property strict
 
 input group "=== 結果記録(検証ログ) ==="
-input bool   SLG_Enable          = true;            // 記録を有効にする
+input bool   SLG_Enable          = true;            // 起動時にログを記録する(チャート上のボタンで随時切替可)
 input string SLG_Horizons        = "3,6,12";        // 評価する本数(その時間足の本数、カンマ区切り)
 input double SLG_HitATR          = 1.0;             // 「動いた」とみなす最大変動幅(ATRの何倍か)
-input string SLG_Folder          = "MarketEngines"; // MQL5/Files内の保存フォルダ
+input string SLG_Folder          = "Verification log"; // MQL5/Files内の保存フォルダ(ジャンクション経由でclaude.ai内に置く)
 input int    SLG_EvalIntervalSec = 60;              // 未評価分のチェック間隔(秒)
 
 #define SLG_EV_HEADER "id,type,symbol,tf_sec,time,price,atr,features"
@@ -51,7 +57,8 @@ string   SLG_statLines[];
 
 int      SLG_horizons[];
 datetime SLG_lastEval = 0;
-bool     SLG_ready = false;
+bool     SLG_ready = false;   // 初期化済み(過去ログの読込が済んでいる)
+bool     SLG_on    = false;   // ログ記録のON/OFF(実行中に切り替え可能)
 
 //+------------------------------------------------------------------+
 string SLG_EventsPath()  { return SLG_Folder + "\\CCOMP_events.csv"; }
@@ -244,10 +251,10 @@ void SLG_LoadEvents()
 bool SLG_Init()
   {
    SLG_ready = false;
-   if(!SLG_Enable)
-      return false;
-
-   FolderCreate(SLG_Folder); // 既に存在する場合はfalseが返るが問題ない
+   SLG_on = SLG_Enable;
+   // フォルダは記録がONの時だけ作る(ジャンクションを作る前に空フォルダができるのを避ける)
+   if(SLG_on)
+      FolderCreate(SLG_Folder); // 既に存在する場合はfalseが返るが問題ない
 
    //--- 評価する本数をパース
    string parts[];
@@ -293,7 +300,7 @@ void SLG_LogEvent(const string type, const string symbol, const ENUM_TIMEFRAMES 
                   const datetime entryTime, const double price, const double atr,
                   const string features)
   {
-   if(!SLG_ready)
+   if(!SLG_ready || !SLG_on)
       return;
 
    int tfSec = PeriodSeconds(tf);
@@ -330,7 +337,7 @@ void SLG_LogEvent(const string type, const string symbol, const ENUM_TIMEFRAMES 
 //+------------------------------------------------------------------+
 void SLG_EvaluatePending()
   {
-   if(!SLG_ready)
+   if(!SLG_ready || !SLG_on)
       return;
 
    datetime now = TimeCurrent();
@@ -407,6 +414,16 @@ int SLG_GetStatLines(string &out[])
       out[i] = SLG_statLines[i];
    return n;
   }
+
+//--- ログ記録のON/OFFを実行中に切り替える
+void SLG_SetOn(const bool on)
+  {
+   SLG_on = on;
+   if(on)
+      FolderCreate(SLG_Folder);
+  }
+
+bool SLG_IsOn() { return SLG_on; }
 
 int  SLG_EventCount() { return ArraySize(SLG_evId); }
 int  SLG_DoneCount()  { return ArraySize(SLG_done); }

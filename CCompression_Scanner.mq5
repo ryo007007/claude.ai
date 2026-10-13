@@ -18,6 +18,8 @@
 #include "MarketEngines/SuddenMoveDetector.mqh"  // 急変検知エンジン
 #include "MarketEngines/SignalAlert.mqh"         // アラートエンジン
 #include "MarketEngines/SignalLogger.mqh"        // 結果記録エンジン
+#include "MarketEngines/EventTimeEngine.mqh"       // 指標発表・市場開場エンジン
+#include "MarketEngines/RelatedPairEngine.mqh"     // 関連通貨エンジン(予兆スコア)
 
 //---------------- 入力パラメータ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,XAUUSD,BTCUSD";
@@ -39,9 +41,14 @@ input int  RefreshSeconds   = 1;    // 再計算の最小間隔(秒)
 input bool OpenInNewChart   = false; // trueなら新規チャート、falseなら現在のチャートを切替
 
 input group "=== 検証パネル(結果記録の集計) ==="
-input bool ShowStatsPanel  = true;   // 検証ログの集計を表示する
+input bool ShowStatsPanel  = true;   // 起動時に検証パネルを表示する(ボタンで随時切替可)
 input int  StatsX          = 10;     // 右上からのX距離
 input int  StatsY          = 20;     // 右上からのY距離
+
+input group "=== 予兆スコア・指標の表示 ==="
+input bool ShowImminenceInList = true;   // 一覧に予兆スコア(%)を表示する
+input bool ShowEventInList     = true;   // 一覧に次の指標・開場までの時間を表示する
+input bool SortByImminence     = false;  // trueなら、圧縮表示を予兆スコアの高い順に並べる(falseは圧縮Score順)
 
 input group "=== 解説パネル(現在のチャートの通貨・時間足) ==="
 input bool ShowDetailPanel = true;               // 解説パネルを表示する
@@ -82,6 +89,15 @@ bool            g_spikeUp[];      // 急変の方向(true=上昇)
 double          g_spikeRatio[];   // 急変検知時のATR比
 double          g_spikeZ[];       // 急変検知時のROC Zスコア
 bool            g_suppressed[];   // 急変で圧縮表示を解除済み(圧縮がNORMALに戻るまで非表示)
+
+// 画面のON/OFF状態(ボタンで切替。チャート切替で読み込み直されても、端末のグローバル変数で引き継ぐ)
+bool            g_logOn   = true;   // 検証ログを記録するか
+bool            g_statsOn = true;   // 検証パネルを表示するか
+
+// 予兆スコア計算用(添字は 時間足番号*銘柄数 + 銘柄番号)
+int             g_immScore[];
+bool            g_immAct[];
+bool            g_immUp[];
 
 void DrawDetailPanel();   // 解説パネル描画(定義はファイル末尾)
 void DrawStatsPanel();    // 検証パネル描画(定義はファイル末尾)
@@ -130,6 +146,25 @@ string TFName(const ENUM_TIMEFRAMES tf)
    string s = EnumToString(tf);
    StringReplace(s, "PERIOD_", "");
    return s;
+  }
+
+//--- 行(インスタンス番号idx)の予兆スコアと、指標・開場情報を計算する
+void ComputeRowImminence(const int idx, REL_Result &rr, EVT_Info &ev)
+  {
+   EVT_GetInfo(g_scan[idx].symbol, PeriodSeconds(g_scan[idx].tf), ev);
+   int si = idx / g_tfCount;
+   int ti = idx % g_tfCount;
+   REL_Compute(si, ti, g_immScore, g_immAct, g_immUp, g_scan[idx].score, ev.score, rr);
+  }
+
+//--- 一覧用の短い指標・開場表示
+string EventShort(const EVT_Info &ev)
+  {
+   if(ev.minToNext >= 0 && ev.minToNext <= 360)
+      return StringFormat("  [%s指標 %d分後]", ev.nextCur, ev.minToNext);
+   if(ev.minToSession >= 0 && ev.minToSession <= 120)
+      return StringFormat("  [%s開場 %d分後]", ev.sessionName, ev.minToSession);
+   return "";
   }
 
 string GVKey(const int i, const string field)
@@ -233,7 +268,13 @@ int OnInit()
             PrintFormat("初期化失敗: %s %s", g_symbols[si], EnumToString(g_tfList[ti]));
         }
 
+   REL_Init(g_symbols, g_symbolCount, g_tfList, g_tfCount);   // 関連通貨エンジン
+
    SLG_Init();          // 結果記録の初期化(過去のログを読み込む)
+   // 画面のON/OFF状態を復元(なければ入力パラメータの値)
+   g_logOn   = GlobalVariableCheck("CCOMP_UI_LOG")   ? (GlobalVariableGet("CCOMP_UI_LOG")   > 0.5) : SLG_Enable;
+   g_statsOn = GlobalVariableCheck("CCOMP_UI_STATS") ? (GlobalVariableGet("CCOMP_UI_STATS") > 0.5) : ShowStatsPanel;
+   SLG_SetOn(g_logOn);
    LoadSpikeStates();   // チャート切替で読み込み直された場合に急変状態を引き継ぐ
 
    EventSetTimer(MathMax(1, RefreshSeconds));
@@ -294,6 +335,27 @@ void UpdateAndDraw()
    for(int i = 0; i < g_scanTotal; i++)
       CCOMP_UpdateInstance(g_scan[i]);
 
+   //--- 指標カレンダー・相関係数の更新(内部で間隔を空けて実行される) ---
+   EVT_Refresh();
+   REL_Update();
+
+   //--- 予兆スコア計算用の配列を作る(添字: 時間足番号*銘柄数 + 銘柄番号) ---
+   {
+      int totalImm = g_symbolCount * g_tfCount;
+      ArrayResize(g_immScore, totalImm);
+      ArrayResize(g_immAct,   totalImm);
+      ArrayResize(g_immUp,    totalImm);
+      for(int ti = 0; ti < g_tfCount; ti++)
+         for(int si = 0; si < g_symbolCount; si++)
+           {
+            int idx = si * g_tfCount + ti;
+            int k   = ti * g_symbolCount + si;
+            g_immScore[k] = g_scan[idx].ready ? g_scan[idx].score : 0;
+            g_immAct[k]   = (nowT < g_spikeUntil[idx]);
+            g_immUp[k]    = g_spikeUp[idx];
+           }
+   }
+
    //--- TRANSITION(圧縮解除)の検証ログとアラート ---
    for(int i = 0; i < g_scanTotal; i++)
      {
@@ -305,10 +367,15 @@ void UpdateAndDraw()
       if(px <= 0.0) continue;
       double atrAbs = g_scan[i].atrPct / 100.0 * px;
 
-      string feat = StringFormat("score=%d;delta=%d;age=%d;atr_p=%.0f;bb_p=%.0f;rng_p=%.0f;adx=%.1f;kc=%d;nr=%d",
+      REL_Result rrT;
+      EVT_Info   evT;
+      ComputeRowImminence(i, rrT, evT);
+
+      string feat = StringFormat("score=%d;delta=%d;age=%d;atr_p=%.0f;bb_p=%.0f;rng_p=%.0f;adx=%.1f;kc=%d;nr=%d;imm=%.0f;rel_comp=%.2f;rel_spike=%.2f;ev=%.2f;ev_min=%d;n_rel=%d",
                                  g_scan[i].score, g_scan[i].delta, g_scan[i].age,
                                  g_scan[i].atrPctile, g_scan[i].bbPctile, g_scan[i].rangePctile,
-                                 g_scan[i].adxValue, g_scan[i].kcSqueeze ? 1 : 0, g_scan[i].isNR ? 1 : 0);
+                                 g_scan[i].adxValue, g_scan[i].kcSqueeze ? 1 : 0, g_scan[i].isNR ? 1 : 0,
+                                 rrT.pct, rrT.compRel, rrT.spikeRel, rrT.event, evT.minToNext, rrT.nRelated);
       SLG_LogEvent("TRANSITION", g_scan[i].symbol, g_scan[i].tf, closeT, px, atrAbs, feat);
 
       // アラートは「判定から2本以内」の新しいものだけ。同じ足は二重に通知しない
@@ -370,12 +437,19 @@ void UpdateAndDraw()
                                          ratio, z, sp.efficiency));
 
                double px = SymbolInfoDouble(g_scan[i].symbol, SYMBOL_BID);
-               string feat = StringFormat("dir=%s;ver=%s;atr_ratio=%.2f;atr_ratio_v1=%.2f;z_v1=%.2f;z_robust=%.2f;eff=%.2f;v1=%d;v2=%d;prev_state=%s;score=%d;kc=%d;nr=%d",
+
+               // 急変の直前の予兆スコア(この周期の配列は急変前の状態で作られている)
+               REL_Result rrS;
+               EVT_Info   evS;
+               ComputeRowImminence(i, rrS, evS);
+
+               string feat = StringFormat("dir=%s;ver=%s;atr_ratio=%.2f;atr_ratio_v1=%.2f;z_v1=%.2f;z_robust=%.2f;eff=%.2f;v1=%d;v2=%d;prev_state=%s;score=%d;kc=%d;nr=%d;imm=%.0f;rel_comp=%.2f;rel_spike=%.2f;ev=%.2f;ev_min=%d;n_rel=%d",
                                           isUp ? "up" : "down", UseSpikeV2 ? "V2" : "V1",
                                           sp.atrRatio, sp.atrRatioV1, sp.rocZ, sp.robustZ, sp.efficiency,
                                           sp.v1Spike ? 1 : 0, sp.isSpike ? 1 : 0,
                                           CCOMP_StateShort(g_scan[i].state), g_scan[i].score,
-                                          g_scan[i].kcSqueeze ? 1 : 0, g_scan[i].isNR ? 1 : 0);
+                                          g_scan[i].kcSqueeze ? 1 : 0, g_scan[i].isNR ? 1 : 0,
+                                          rrS.pct, rrS.compRel, rrS.spikeRel, rrS.event, evS.minToNext, rrS.nRelated);
                SLG_LogEvent("SPIKE", g_scan[i].symbol, g_scan[i].tf, nowT, px, sp.atrAvg, feat);
               }
            }
@@ -413,7 +487,15 @@ void UpdateAndDraw()
       candIdx[n]  = i;
       candKind[n] = 0;
       // TRANSITIONは圧縮表示の中で最優先、それ以外はScoreの高い順
-      candKey[n]  = (g_scan[i].state == CCOMP_TRANSITION) ? (100.0 + g_scan[i].score) : (double)g_scan[i].score;
+      double baseKey = (double)g_scan[i].score;
+      if(SortByImminence)
+        {
+         REL_Result rrK;
+         EVT_Info   evK;
+         ComputeRowImminence(i, rrK, evK);
+         baseKey = rrK.pct / 12.5;   // 0〜100%を0〜8に換算(Score順と同じ尺度にそろえる)
+        }
+      candKey[n]  = (g_scan[i].state == CCOMP_TRANSITION) ? (100.0 + baseKey) : baseKey;
       n++;
      }
 
@@ -494,6 +576,17 @@ void UpdateAndDraw()
          line = StringFormat("%-9s %-4s %-20s Sc%d Δ%+d Age%d",
             inst.symbol, tfName, CCOMP_StateText(inst.state), inst.score, inst.delta, inst.age);
          rowClr = CCOMP_StateColor(inst.state);
+
+         if(ShowImminenceInList || ShowEventInList)
+           {
+            REL_Result rrL;
+            EVT_Info   evL;
+            ComputeRowImminence(idx, rrL, evL);
+            if(ShowImminenceInList && REL_Enable)
+               line += StringFormat("  予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
+            if(ShowEventInList)
+               line += EventShort(evL);
+           }
         }
 
       DrawRow(r, line, rowClr);
@@ -554,6 +647,25 @@ void OnTimer()
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
   {
    if(id != CHARTEVENT_OBJECT_CLICK) return;
+
+   //--- 画面上のON/OFFボタン ---
+   if(sparam == "CCOMP_Scan_BtnLog")
+     {
+      g_logOn = !g_logOn;
+      GlobalVariableSet("CCOMP_UI_LOG", g_logOn ? 1.0 : 0.0);
+      SLG_SetOn(g_logOn);
+      DrawStatsPanel();
+      ChartRedraw(0);
+      return;
+     }
+   if(sparam == "CCOMP_Scan_BtnStats")
+     {
+      g_statsOn = !g_statsOn;
+      GlobalVariableSet("CCOMP_UI_STATS", g_statsOn ? 1.0 : 0.0);
+      DrawStatsPanel();
+      ChartRedraw(0);
+      return;
+     }
 
    string prefix = "CCOMP_Scan_Row_";
    if(StringFind(sparam, prefix) != 0) return;
@@ -673,8 +785,8 @@ void DrawDetailPanel()
       return;
      }
 
-   string lines[16];
-   color  clrs[16];
+   string lines[24];
+   color  clrs[24];
    int    L = 0;
 
    ENUM_TIMEFRAMES curTF = (ENUM_TIMEFRAMES)_Period;
@@ -738,6 +850,41 @@ void DrawDetailPanel()
                               inst.isNR ? "はい" : "いいえ");
       clrs[L]  = base; L++;
 
+      // 予兆スコア・関連ペア・指標/開場
+      REL_Result rrD;
+      EVT_Info   evD;
+      ComputeRowImminence(idx, rrD, evD);
+
+      if(REL_Enable)
+        {
+         lines[L] = StringFormat("  予兆スコア %.0f%%%s  (自身の圧縮%.0f%% / 関連の圧縮%.0f%% / 関連の急変%.0f%% / 指標・開場%.0f%%)  ※目安であり確率ではありません",
+                                 rrD.pct, rrD.dir > 0 ? " 方向目安↑" : (rrD.dir < 0 ? " 方向目安↓" : ""),
+                                 rrD.compSelf * 100.0, rrD.compRel * 100.0, rrD.spikeRel * 100.0, rrD.event * 100.0);
+         clrs[L]  = clrAqua; L++;
+
+         lines[L] = StringFormat("  関連ペア(|相関|%.1f以上): %d本   急変中: %s   強く圧縮中: %s",
+                                 REL_MinCorr, rrD.nRelated,
+                                 StringLen(rrD.topSpike) > 0 ? rrD.topSpike : "なし",
+                                 StringLen(rrD.topComp)  > 0 ? rrD.topComp  : "なし");
+         clrs[L]  = base; L++;
+        }
+
+      string evNext = (evD.minToNext >= 0)
+         ? StringFormat("%s %s(重要度%d) %d分後", evD.nextCur, evD.nextName, evD.nextImp, evD.minToNext)
+         : (EVT_UseCalendar ? (g_evtOk ? "なし" : "カレンダー" + EVT_StatusText()) : "(無効)");
+      string evLast = (evD.minSinceLast >= 0)
+         ? StringFormat("%s %s %d分前", evD.lastCur, evD.lastName, evD.minSinceLast) : "なし";
+      lines[L] = StringFormat("  次の指標: %s   直前の指標: %s", evNext, evLast);
+      clrs[L]  = base; L++;
+
+      if(EVT_UseSessions)
+        {
+         lines[L] = (evD.minToSession >= 0)
+            ? StringFormat("  次の市場開場: %s %d分後", evD.sessionName, evD.minToSession)
+            : "  次の市場開場: なし";
+         clrs[L]  = base; L++;
+        }
+
       // 急変との連携状況
       if(UseSpikeOverride && TimeCurrent() < g_spikeUntil[idx])
         {
@@ -768,9 +915,38 @@ void DrawDetailPanel()
 //+------------------------------------------------------------------+
 int g_statLineCount = 0;
 
+//--- 右上のON/OFFボタンを1つ描画
+void DrawUiButton(const string name, const int x, const string text, const color bg)
+  {
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XSIZE, 128);
+      ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, clrGray);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+     }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, StatsY);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, name, OBJPROP_STATE, false);   // 押しっぱなし表示にならないよう戻す
+  }
+
 void DrawStatsPanel()
   {
-   if(!ShowStatsPanel)
+   //--- ボタン(検証パネルを隠していても常に表示する) ---
+   DrawUiButton("CCOMP_Scan_BtnStats", StatsX,
+                g_statsOn ? "検証パネル: 表示" : "検証パネル: 非表示",
+                g_statsOn ? C'40,90,40' : C'70,70,70');
+   DrawUiButton("CCOMP_Scan_BtnLog", StatsX + 132,
+                g_logOn ? "ログ記録: ON" : "ログ記録: OFF",
+                g_logOn ? C'40,90,40' : C'110,40,40');
+
+   if(!g_statsOn)
      {
       ObjectsDeleteAll(0, "CCOMP_Scan_Stat_");
       g_statLineCount = 0;
@@ -785,7 +961,7 @@ void DrawStatsPanel()
    else
      {
       n = SLG_GetStatLines(lines);
-      head = StringFormat("検証ログ: 記録%d件 / 評価済%d行", SLG_EventCount(), SLG_DoneCount());
+      head = StringFormat("検証ログ[%s]: 記録%d件 / 評価済%d行", SLG_IsOn() ? "記録中" : "停止中", SLG_EventCount(), SLG_DoneCount());
      }
 
    int total = 1 + (n > 0 ? n : 1);
@@ -809,7 +985,7 @@ void DrawStatsPanel()
          ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
         }
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, StatsX);
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, StatsY + j * 15);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, StatsY + 28 + j * 15);   // ボタンの下から表示
       ObjectSetString(0, name, OBJPROP_TEXT, text);
       ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
      }
