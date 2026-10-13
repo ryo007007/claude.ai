@@ -22,15 +22,15 @@
 #include "MarketEngines/RelatedPairEngine.mqh"     // 関連通貨エンジン(予兆スコア)
 
 //---------------- 入力パラメータ ----------------
-input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,XAUUSD,BTCUSD";
+input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
 
 input group "=== 監視する時間足 ==="
-input bool ScanD1  = true;  // 日足
+input bool ScanD1  = false;  // 日足
 input bool ScanH4  = true;  // 4時間足
 input bool ScanH1  = true;  // 1時間足
 input bool ScanM30 = true;  // 30分足
 input bool ScanM15 = true;  // 15分足
-input bool ScanM5  = false; // 5分足（監視対象が多いと重くなるのでデフォルトOFF）
+input bool ScanM5  = true;  // 5分足（銘柄が多く重い場合はOFF）
 input bool ScanM1  = false; // 1分足（同上）
 
 input group "=== 表示設定 ==="
@@ -42,7 +42,7 @@ input bool OpenInNewChart   = false; // trueなら新規チャート、falseな�
 
 input group "=== 検証パネル(結果記録の集計) ==="
 input bool ShowStatsPanel  = true;   // 起動時に検証パネルを表示する(ボタンで随時切替可)
-input int  StatsX          = 10;     // 右上からのX距離
+input int  StatsX          = 130;     // 右上からのX距離
 input int  StatsY          = 20;     // 右上からのY距離
 
 input group "=== 予兆スコア・指標の表示 ==="
@@ -53,7 +53,7 @@ input bool SortByImminence     = false;  // trueなら、圧縮表示を予兆�
 input group "=== 解説パネル(現在のチャートの通貨・時間足) ==="
 input bool ShowDetailPanel = true;               // 解説パネルを表示する
 input ENUM_BASE_CORNER DetailCorner = CORNER_LEFT_LOWER; // 表示する隅
-input int  DetailX         = 10;                 // 隅からのX距離
+input int  DetailX         = 500;                // 隅からのX距離
 input int  DetailY         = 20;                 // 隅からのY距離
 
 input group "=== 表示する最低状態 ==="
