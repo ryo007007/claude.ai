@@ -20,6 +20,8 @@
 #include "MarketEngines/SignalLogger.mqh"        // 結果記録エンジン
 #include "MarketEngines/EventTimeEngine.mqh"       // 指標発表・市場開場エンジン
 #include "MarketEngines/RelatedPairEngine.mqh"     // 関連通貨エンジン(予兆スコア)
+#include "MarketEngines/TDSequentialEngine.mqh"    // TDシーケンシャルエンジン
+#include "MarketEngines/WolfeWaveEngine.mqh"        // ウォルフ波動エンジン
 
 //---------------- 入力パラメータ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
@@ -99,8 +101,17 @@ int             g_immScore[];
 bool            g_immAct[];
 bool            g_immUp[];
 
+// TDシーケンシャルの結果(g_scanと同じ添字)と、最後に計算した確定足の時刻
+TDS_Result      g_td[];
+datetime        g_tdBar[];
+
+// ウォルフ波動の結果(g_scanと同じ添字)と、最後に計算した確定足の時刻
+WLF_Result      g_wlf[];
+datetime        g_wlfBar[];
+
 void DrawDetailPanel();   // 解説パネル描画(定義はファイル末尾)
 void DrawStatsPanel();    // 検証パネル描画(定義はファイル末尾)
+void DrawWolfeChart();    // ウォルフ波動のチャート描画(定義はファイル末尾)
 
 //+------------------------------------------------------------------+
 int ParseSymbols(string src, string &outArr[])
@@ -251,6 +262,19 @@ int OnInit()
    ArrayResize(g_spikeRatio, g_scanTotal);
    ArrayResize(g_spikeZ,     g_scanTotal);
    ArrayResize(g_suppressed, g_scanTotal);
+   ArrayResize(g_td,    g_scanTotal);
+   ArrayResize(g_tdBar, g_scanTotal);
+   ArrayResize(g_wlf,    g_scanTotal);
+   ArrayResize(g_wlfBar, g_scanTotal);
+   for(int tk = 0; tk < g_scanTotal; tk++)
+     {
+      g_tdBar[tk]      = 0;
+      g_td[tk].ready   = false;
+      g_td[tk].recent  = false;
+      g_wlfBar[tk]     = 0;
+      g_wlf[tk].ready  = false;
+      g_wlf[tk].found  = false;
+     }
    for(int k = 0; k < g_scanTotal; k++)
      {
       g_spikeUntil[k] = 0;
@@ -288,6 +312,8 @@ void OnDeinit(const int reason)
    for(int i = 0; i < g_scanTotal; i++)
       CCOMP_ReleaseInstance(g_scan[i]);
    ObjectsDeleteAll(0, "CCOMP_Scan_");
+   g_wlfDrawKey = "x";      // 描画キーを無効化してから削除する
+   WLF_ClearDrawing();
    ChartRedraw(0);
   }
 
@@ -339,6 +365,76 @@ void UpdateAndDraw()
    EVT_Refresh();
    REL_Update();
 
+   //--- TDシーケンシャル(確定足が更新された行だけ計算する) ---
+   if(TDS_Enable)
+     {
+      for(int i = 0; i < g_scanTotal; i++)
+        {
+         if(!g_scan[i].ready || g_scan[i].lastBarTime == g_tdBar[i]) continue;
+         if(TDS_Compute(g_scan[i].symbol, g_scan[i].tf, g_td[i]))
+            g_tdBar[i] = g_scan[i].lastBarTime;
+        }
+     }
+
+   //--- ウォルフ波動(確定足が更新された行だけ計算する) ---
+   if(WLF_Enable)
+     {
+      for(int i = 0; i < g_scanTotal; i++)
+        {
+         if(!g_scan[i].ready || g_scan[i].lastBarTime == g_wlfBar[i]) continue;
+         if(WLF_Compute(g_scan[i].symbol, g_scan[i].tf, g_wlf[i]))
+            g_wlfBar[i] = g_scan[i].lastBarTime;
+        }
+
+      //--- ポイント5が確定した行の、検証ログと通知 ---
+      for(int i = 0; i < g_scanTotal; i++)
+        {
+         if(!WLF_IsConfirmed(g_wlf[i])) continue;
+
+         int ps = PeriodSeconds(g_scan[i].tf);
+         datetime closeT = g_scan[i].lastBarTime + ps;
+         double px = iClose(g_scan[i].symbol, g_scan[i].tf, 1);
+         if(px <= 0.0 || g_wlf[i].atr <= 0.0) continue;
+
+         // ウォルフが強気(買い)なら、下落の疲弊(TDのB完了)と重なると整合。弱気(売り)なら上昇の疲弊(S完了)
+         bool tdAlign = (TDS_Enable && g_td[i].ready && g_td[i].recent && g_td[i].recentDir == -g_wlf[i].dir);
+         bool revBar  = (g_wlf[i].pinBar || g_wlf[i].engulf);
+         double p5key = (double)g_wlf[i].t5;
+
+         string feat = WLF_Feat(g_wlf[i]) + ";comp_state=" + CCOMP_StateShort(g_scan[i].state)
+                     + ";comp_score=" + IntegerToString(g_scan[i].score);
+         if(TDS_Enable && g_td[i].ready)
+            feat += ";" + TDS_Feat(g_td[i]) + ";td_align=" + (tdAlign ? "1" : "0");
+
+         //--- 検証ログ: 単独 / +TD / +TD+反転足 を別の種類として記録し、成績を比べられるようにする ---
+         if(SLG_IsOn())
+           {
+            if(SAL_FireOnce(GVKey(i, "LW"), p5key))
+               SLG_LogEvent("WOLFE5", g_scan[i].symbol, g_scan[i].tf, closeT, px, g_wlf[i].atr, feat);
+            if(tdAlign && SAL_FireOnce(GVKey(i, "LWT"), p5key))
+               SLG_LogEvent("WOLFE5+TD", g_scan[i].symbol, g_scan[i].tf, closeT, px, g_wlf[i].atr, feat);
+            if(tdAlign && revBar && SAL_FireOnce(GVKey(i, "LWP"), p5key))
+               SLG_LogEvent("WOLFE5+TD+PIN", g_scan[i].symbol, g_scan[i].tf, closeT, px, g_wlf[i].atr, feat);
+           }
+
+         //--- 通知 ---
+         string head = StringFormat("%s %s %s P5確定 EPA%s ETA%d本後 RR%.1f",
+                                    g_scan[i].symbol, TFName(g_scan[i].tf), g_wlf[i].dir > 0 ? "買い" : "売り",
+                                    DoubleToString(g_wlf[i].epa, g_wlf[i].digits), g_wlf[i].etaBars, g_wlf[i].rr);
+         if(WLF_AlertOnWolfe && SAL_FireOnce(GVKey(i, "AW"), p5key))
+            SAL_Queue("【ウォルフ波動】" + head);
+         if(WLF_AlertOnCombo && tdAlign)
+           {
+            bool f3 = (revBar && SAL_FireOnce(GVKey(i, "AWP"), p5key));
+            bool f2 = SAL_FireOnce(GVKey(i, "AWT"), p5key);   // 常に消費する(3条件の通知と二重にしない)
+            if(f3)
+               SAL_Queue("【ウォルフ+TD+反転足(3条件)】" + head);
+            else if(f2 && !revBar)
+               SAL_Queue("【ウォルフ+TD】" + head);
+           }
+        }
+     }
+
    //--- 予兆スコア計算用の配列を作る(添字: 時間足番号*銘柄数 + 銘柄番号) ---
    {
       int totalImm = g_symbolCount * g_tfCount;
@@ -376,7 +472,15 @@ void UpdateAndDraw()
                                  g_scan[i].atrPctile, g_scan[i].bbPctile, g_scan[i].rangePctile,
                                  g_scan[i].adxValue, g_scan[i].kcSqueeze ? 1 : 0, g_scan[i].isNR ? 1 : 0,
                                  rrT.pct, rrT.compRel, rrT.spikeRel, rrT.event, evT.minToNext, rrT.nRelated);
+      // TDシーケンシャルの完了(9または13)が直近にあるか
+      bool tdCombo = (TDS_Enable && g_td[i].ready && g_td[i].recent);
+      if(TDS_Enable && g_td[i].ready)
+         feat += ";" + TDS_Feat(g_td[i]);
+
       SLG_LogEvent("TRANSITION", g_scan[i].symbol, g_scan[i].tf, closeT, px, atrAbs, feat);
+      // TDと重なった場合だけ別の種類としても記録する(重ならない場合と成績を比べるため)
+      if(tdCombo)
+         SLG_LogEvent("TRANSITION+TD", g_scan[i].symbol, g_scan[i].tf, closeT, px, atrAbs, feat);
 
       // アラートは「判定から2本以内」の新しいものだけ。同じ足は二重に通知しない
       if(SAL_OnTransition && nowT <= closeT + 2 * ps &&
@@ -385,6 +489,14 @@ void UpdateAndDraw()
          SAL_Queue(StringFormat("【圧縮解除】%s %s TRANSITION Score%d(Δ%+d) KC%s NR%s",
                                 g_scan[i].symbol, TFName(g_scan[i].tf), g_scan[i].score, g_scan[i].delta,
                                 g_scan[i].kcSqueeze ? "○" : "×", g_scan[i].isNR ? "○" : "×"));
+        }
+      if(tdCombo && TDS_AlertOnCombo && SAL_OnTransition && nowT <= closeT + 2 * ps &&
+         SAL_FireOnce(GVKey(i, "ATD"), (double)g_scan[i].lastBarTime))
+        {
+         SAL_Queue(StringFormat("【圧縮解除+TD】%s %s %s%d完了(%d本前) Score%d",
+                                g_scan[i].symbol, TFName(g_scan[i].tf),
+                                TDS_DirChar(g_td[i].recentDir), g_td[i].recentKind, g_td[i].recentAgo,
+                                g_scan[i].score));
         }
      }
 
@@ -450,7 +562,20 @@ void UpdateAndDraw()
                                           CCOMP_StateShort(g_scan[i].state), g_scan[i].score,
                                           g_scan[i].kcSqueeze ? 1 : 0, g_scan[i].isNR ? 1 : 0,
                                           rrS.pct, rrS.compRel, rrS.spikeRel, rrS.event, evS.minToNext, rrS.nRelated);
+               // 直近のTD完了と逆向きの急変か(上昇の疲弊の後の下落、下落の疲弊の後の上昇)
+               bool tdAlign = (TDS_Enable && TDS_IsReversalAligned(g_td[i], isUp));
+               if(TDS_Enable && g_td[i].ready)
+                  feat += ";" + TDS_Feat(g_td[i]) + ";td_align=" + (tdAlign ? "1" : "0");
+
                SLG_LogEvent("SPIKE", g_scan[i].symbol, g_scan[i].tf, nowT, px, sp.atrAvg, feat);
+               if(tdAlign)
+                 {
+                  SLG_LogEvent("SPIKE+TDREV", g_scan[i].symbol, g_scan[i].tf, nowT, px, sp.atrAvg, feat);
+                  if(TDS_AlertOnCombo && SAL_OnSpike)
+                     SAL_Queue(StringFormat("【急変+TD反転整合】%s %s %s %s%d完了(%d本前)",
+                                            g_scan[i].symbol, TFName(g_scan[i].tf), isUp ? "上昇" : "下落",
+                                            TDS_DirChar(g_td[i].recentDir), g_td[i].recentKind, g_td[i].recentAgo));
+                 }
               }
            }
         }
@@ -465,6 +590,7 @@ void UpdateAndDraw()
    ArrayResize(candKind, g_scanTotal);
    int n = 0;
    int nSpike = 0;
+   int nWolfe = 0;
    for(int i = 0; i < g_scanTotal; i++)
      {
       if(!g_scan[i].ready) continue;
@@ -483,7 +609,22 @@ void UpdateAndDraw()
       // 急変で圧縮表示を解除された行は、圧縮がNORMALに戻るまで出さない
       if(UseSpikeOverride && g_suppressed[i]) continue;
 
-      if(!ShouldDisplay(g_scan[i].state)) continue;
+      if(!ShouldDisplay(g_scan[i].state))
+        {
+         // 圧縮でも急変でもないが、ウォルフ波動のポイント5が確定している行
+         if(WLF_Enable && WLF_ListRows && WLF_IsConfirmed(g_wlf[i]))
+           {
+            double wk = 4.0;
+            if(TDS_Enable && g_td[i].ready && g_td[i].recent && g_td[i].recentDir == -g_wlf[i].dir) wk += 0.6;
+            if(g_wlf[i].pinBar || g_wlf[i].engulf) wk += 0.3;
+            candIdx[n]  = i;
+            candKind[n] = 2;
+            candKey[n]  = wk;
+            n++;
+            nWolfe++;
+           }
+         continue;
+        }
       candIdx[n]  = i;
       candKind[n] = 0;
       // TRANSITIONは圧縮表示の中で最優先、それ以外はScoreの高い順
@@ -529,7 +670,7 @@ void UpdateAndDraw()
    int shown = MathMin(n, MaxRows);
 
    //--- タイトル行 ---
-   string title = StringFormat("CCompression Scanner  (圧縮%d件 急変%d件 / 全%d組)", n - nSpike, nSpike, g_scanTotal);
+   string title = StringFormat("CCompression Scanner  (圧縮%d件 急変%d件 ウォルフ%d件 / 全%d組)", n - nSpike - nWolfe, nSpike, nWolfe, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
       if(ObjectFind(0, tname) < 0)
@@ -570,6 +711,28 @@ void UpdateAndDraw()
             inst.symbol, tfName, g_spikeUp[idx] ? "急変 ↑ (上昇)" : "急変 ↓ (下落)",
             g_spikeRatio[idx], g_spikeZ[idx]);
          rowClr = g_spikeUp[idx] ? SpikeUpColor : SpikeDownColor;
+
+         if(TDS_Enable && TDS_ShowInList && g_td[idx].ready)
+           {
+            line += TDS_Text(g_td[idx]);
+            if(TDS_IsReversalAligned(g_td[idx], g_spikeUp[idx]))
+               line += " ★TD反転整合";
+           }
+         if(WLF_Enable && WLF_ShowInList)
+            line += WLF_Text(g_wlf[idx]);
+        }
+      else if(candKind[r] == 2)
+        {
+         // ウォルフ波動の行
+         line = StringFormat("%-9s %-4s %-20s", inst.symbol, tfName, "ウォルフ波動");
+         line += WLF_Text(g_wlf[idx]);
+         if(TDS_Enable && TDS_ShowInList && g_td[idx].ready)
+           {
+            line += TDS_Text(g_td[idx]);
+            if(g_td[idx].recent && g_td[idx].recentDir == -g_wlf[idx].dir)
+               line += " ★TD整合";
+           }
+         rowClr = (g_wlf[idx].dir > 0) ? WLF_ColorBuy : WLF_ColorSell;
         }
       else
         {
@@ -587,6 +750,15 @@ void UpdateAndDraw()
             if(ShowEventInList)
                line += EventShort(evL);
            }
+
+         if(TDS_Enable && TDS_ShowInList && g_td[idx].ready)
+           {
+            line += TDS_Text(g_td[idx]);
+            if(inst.state == CCOMP_TRANSITION && g_td[idx].recent)
+               line += " ★TD重複";   // 圧縮解除と、TD完了が重なっている
+           }
+         if(WLF_Enable && WLF_ShowInList)
+            line += WLF_Text(g_wlf[idx]);
         }
 
       DrawRow(r, line, rowClr);
@@ -617,6 +789,7 @@ void UpdateAndDraw()
       ObjectDelete(0, "CCOMP_Scan_More");
 
    DrawDetailPanel();
+   DrawWolfeChart();
    DrawStatsPanel();
 
    SAL_Flush();            // ためたアラートをまとめて送信
@@ -785,8 +958,8 @@ void DrawDetailPanel()
       return;
      }
 
-   string lines[24];
-   color  clrs[24];
+   string lines[30];
+   color  clrs[30];
    int    L = 0;
 
    ENUM_TIMEFRAMES curTF = (ENUM_TIMEFRAMES)_Period;
@@ -883,6 +1056,78 @@ void DrawDetailPanel()
             ? StringFormat("  次の市場開場: %s %d分後", evD.sessionName, evD.minToSession)
             : "  次の市場開場: なし";
          clrs[L]  = base; L++;
+        }
+
+      // TDシーケンシャル
+      if(TDS_Enable && g_td[idx].ready)
+        {
+         TDS_Result td = g_td[idx];
+         string setupTxt = (td.setupCount > 0) ? StringFormat("%s %d/9", TDS_DirChar(td.setupDir), td.setupCount) : "なし";
+         string cdTxt    = (td.cdCount > 0)    ? StringFormat("%s %d/13", TDS_DirChar(td.cdDir), td.cdCount) : "なし";
+         string done = "";
+         if(td.lastSetupAgo >= 0)
+            done += StringFormat("%s9%s %d本前", TDS_DirChar(td.lastSetupDir), td.lastPerfect ? "(パーフェクト)" : "", td.lastSetupAgo);
+         if(td.lastCdAgo >= 0)
+           {
+            if(StringLen(done) > 0) done += " / ";
+            done += StringFormat("%s13 %d本前", TDS_DirChar(td.lastCdDir), td.lastCdAgo);
+           }
+         if(StringLen(done) == 0) done = "なし";
+
+         lines[L] = StringFormat("  TD: セットアップ進行 %s / カウントダウン進行 %s / 直近の完了: %s", setupTxt, cdTxt, done);
+         clrs[L]  = base; L++;
+
+         if(inst.state == CCOMP_TRANSITION && td.recent)
+           {
+            lines[L] = StringFormat("  判定: 圧縮解除 + 直近にTD完了(%s%d, %d本前)  → 圧縮解除がトレンド疲弊の直後に起きています",
+                                    TDS_DirChar(td.recentDir), td.recentKind, td.recentAgo);
+            clrs[L]  = clrAqua; L++;
+           }
+
+         lines[L] = "  TD凡例: S=上昇が続いた疲弊(売り側) B=下落が続いた疲弊(買い側)。圧縮・急変を置き換えるものではなく補助的な確認用";
+         clrs[L]  = clrGray; L++;
+        }
+
+      // ウォルフ波動
+      if(WLF_Enable && g_wlf[idx].ready)
+        {
+         WLF_Result w = g_wlf[idx];
+         if(!w.found)
+           {
+            lines[L] = "  ウォルフ波動: 該当なし(直近でポイント5まで揃ったパターンはありません)";
+            clrs[L]  = clrGray; L++;
+           }
+         else
+           {
+            bool tdAl = (TDS_Enable && g_td[idx].ready && g_td[idx].recent && g_td[idx].recentDir == -w.dir);
+            bool rev  = (w.pinBar || w.engulf);
+            string revTxt = w.pinBar ? "ピンバー" : (w.engulf ? "包み足" : "なし");
+
+            lines[L] = StringFormat("  ウォルフ波動: %s %s   P1=%s P2=%s P3=%s P4=%s P5=%s",
+                                    w.dir > 0 ? "強気(買い)" : "弱気(売り)", w.state == 2 ? "ポイント5確定" : "ポイント5候補",
+                                    DoubleToString(w.p1, w.digits), DoubleToString(w.p2, w.digits),
+                                    DoubleToString(w.p3, w.digits), DoubleToString(w.p4, w.digits),
+                                    DoubleToString(w.p5, w.digits));
+            clrs[L]  = (w.dir > 0) ? WLF_ColorBuy : WLF_ColorSell; L++;
+
+            lines[L] = StringFormat("  目標EPA %s  ETA %s  値幅%.1fATR / リスク%.1fATR (RR %.1f)  行き過ぎ%.1fATR  反転足: %s",
+                                    DoubleToString(w.epa, w.digits),
+                                    (w.etaBars > 0) ? StringFormat("%d本後", w.etaBars) : "経過",
+                                    w.rewardATR, w.riskATR, w.rr, w.overshootATR, revTxt);
+            clrs[L]  = base; L++;
+
+            string judge;
+            if(w.state != 2)
+               judge = "ポイント5候補です。終値が1-3ラインの内側へ戻って足が確定するのを待ちます";
+            else if(tdAl && rev)
+               judge = "ウォルフP5確定 + TD完了 + 反転足 → 3条件が揃っています";
+            else if(tdAl)
+               judge = "ウォルフP5確定 + TD完了(反転足はまだ)";
+            else
+               judge = "ウォルフP5確定のみ(TD完了は重なっていません)";
+            lines[L] = "  判定: " + judge;
+            clrs[L]  = (w.state == 2 && tdAl) ? clrAqua : base; L++;
+           }
         }
 
       // 急変との連携状況
@@ -993,5 +1238,30 @@ void DrawStatsPanel()
    for(int j = total; j < g_statLineCount; j++)
       ObjectDelete(0, "CCOMP_Scan_Stat_" + IntegerToString(j));
    g_statLineCount = total;
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| ウォルフ波動のチャート描画                                         |
+//| 現在のチャートの通貨ペア・時間足に、パターンがあればラインを描く   |
+//+------------------------------------------------------------------+
+void DrawWolfeChart()
+  {
+   if(!WLF_Enable || !WLF_DrawOnChart)
+     {
+      WLF_ClearDrawing();
+      return;
+     }
+   ENUM_TIMEFRAMES curTF = (ENUM_TIMEFRAMES)_Period;
+   int idx = -1;
+   for(int i = 0; i < g_scanTotal; i++)
+      if(g_scan[i].symbol == _Symbol && g_scan[i].tf == curTF) { idx = i; break; }
+
+   if(idx < 0 || !g_wlf[idx].ready || !g_wlf[idx].found)
+     {
+      WLF_ClearDrawing();
+      return;
+     }
+   WLF_DrawPattern(g_wlf[idx]);
   }
 //+------------------------------------------------------------------+

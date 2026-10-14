@@ -28,6 +28,7 @@ input color  EVL_ColorHigh   = clrRed;      // 重要指標の線の色
 input color  EVL_ColorOther  = clrOrange;   // その他(前回大きく動いた指標)の線の色
 input ENUM_LINE_STYLE EVL_Style = STYLE_DASH; // 線の種類
 input int    EVL_Width       = 1;           // 線の太さ
+input ENUM_LINE_STYLE EVL_PastStyle = STYLE_DOT; // 過去の指標の線の種類
 input bool   EVL_ShowLabels  = true;        // 線の横に指標名を表示する
 
 input group "=== 指標リスト・ボタンの位置 ==="
@@ -49,6 +50,7 @@ int      gCls[];
 int      gCnt[];
 string   gText[];
 string   gTip[];
+double   gAct[];      // その時刻の指標の「今回の動き」(ATR倍。過去の指標のみ。-1=なし)
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -104,6 +106,7 @@ void BuildGroups()
    ArrayResize(gCnt, 0);
    ArrayResize(gText, 0);
    ArrayResize(gTip, 0);
+   ArrayResize(gAct, 0);
 
    int n = EVI_Count();
    for(int i = 0; i < n; i++)
@@ -120,6 +123,9 @@ void BuildGroups()
       string mv = (last >= 0.0)
          ? StringFormat("前回の動き %.1fATR(直近%d回平均 %.1fATR)", last, EVI_ValidN(i), avg)
          : "前回の動き: 算出できません(履歴不足など)";
+      double act = EVI_ActualRatio(i);
+      if(act >= 0.0)
+         mv += StringFormat(" / 今回の動き %.1fATR", act);
       string tip = StringFormat("%s  [%s] %s  重要度:%s  %s",
                                 EVI_JstText(t), g_eviCur[i], g_eviName[i], EVI_ImpText(g_eviImp[i]), mv);
 
@@ -127,6 +133,7 @@ void BuildGroups()
       if(g > 0 && gTime[g - 1] == t)
         {
          gCls[g - 1] = MathMax(gCls[g - 1], cls);
+         gAct[g - 1] = MathMax(gAct[g - 1], act);
          gCnt[g - 1]++;
          if(gCnt[g - 1] <= 2)
             gText[g - 1] += " / " + nm;
@@ -139,11 +146,13 @@ void BuildGroups()
          ArrayResize(gCnt,  g + 1);
          ArrayResize(gText, g + 1);
          ArrayResize(gTip,  g + 1);
+         ArrayResize(gAct,  g + 1);
          gTime[g] = t;
          gCls[g]  = cls;
          gCnt[g]  = 1;
          gText[g] = nm;
          gTip[g]  = tip;
+         gAct[g]  = act;
         }
      }
   }
@@ -166,7 +175,7 @@ void DrawLines()
       string ln = "EVL_L_" + IntegerToString((long)gTime[g]);
       string tn = "EVL_T_" + IntegerToString((long)gTime[g]);
       color  clr = (gCls[g] == 2) ? EVL_ColorHigh : EVL_ColorOther;
-      ENUM_LINE_STYLE st = (gTime[g] < nowS) ? STYLE_DOT : EVL_Style;   // 過去の指標は点線
+      ENUM_LINE_STYLE st = (gTime[g] < nowS) ? EVL_PastStyle : EVL_Style;   // 過去の指標は別の線種
 
       if(ObjectFind(0, ln) < 0)
         {
@@ -190,6 +199,9 @@ void DrawLines()
          string txt = EVI_JstText(gTime[g]) + " " + gText[g];
          if(gCnt[g] > 2)
             txt += StringFormat(" 他%d件", gCnt[g] - 2);
+         // 過去の指標は、実際にどれだけ動いたか(ATR倍)を付ける。判定(色)との答え合わせ用
+         if(gTime[g] < nowS && gAct[g] >= 0.0)
+            txt += StringFormat(" → %.1fATR", gAct[g]);
 
          if(ObjectFind(0, tn) < 0)
            {

@@ -28,7 +28,7 @@
 
 input group "=== 指標ライン: 取得範囲 ==="
 input int  EVI_FutureHours       = 48;  // 何時間先までの指標を取得するか
-input int  EVI_PastHours         = 0;   // 過去の指標も取得する時間(検証用。0=過去は表示しない)
+input int  EVI_PastHours         = 72;  // 過去の指標も表示する時間(検証用。0=過去は表示しない)
 input int  EVI_RefreshMin        = 10;  // カレンダーの再取得間隔(分)
 input int  EVI_TimeCorrectionMin = 0;   // カレンダー時刻の補正(分)。ずれる場合に調整
 
@@ -52,11 +52,15 @@ datetime g_eviTime[];                 // カレンダーの時刻(サーバー�
 int      g_eviImp[];                  // 重要度 1=低 2=中 3=高
 string   g_eviName[];
 
-//--- 過去の値動きの評価結果(イベントIDごとのキャッシュ)
+//--- 値動きの評価結果(発表1件ごとのキャッシュ = イベントID + 発表時刻)
+//--- 「前回」は、その発表より前の発表を指す。過去の指標でも、その発表自体の動きは判定に含めない
 ulong    g_eviCacheId[];
+datetime g_eviCacheTime[];
 double   g_eviCacheLast[];            // 前回の発表の値幅倍率(-1=算出不能)
 double   g_eviCacheAvg[];             // 直近数回の平均倍率
 int      g_eviCacheN[];               // 算出できた発表回数
+double   g_eviCacheActual[];          // この発表自体の値幅倍率(発表から時間が経ったもののみ。-1=未算出)
+int      g_eviCacheTries[];           // 評価を試みた回数
 datetime g_eviCacheStamp[];
 
 datetime g_eviLastFetch = 0;
@@ -87,9 +91,12 @@ bool EVI_Init(const string symbol)
    ArrayResize(g_eviImp, 0);
    ArrayResize(g_eviName, 0);
    ArrayResize(g_eviCacheId, 0);
+   ArrayResize(g_eviCacheTime, 0);
    ArrayResize(g_eviCacheLast, 0);
    ArrayResize(g_eviCacheAvg, 0);
    ArrayResize(g_eviCacheN, 0);
+   ArrayResize(g_eviCacheActual, 0);
+   ArrayResize(g_eviCacheTries, 0);
    ArrayResize(g_eviCacheStamp, 0);
 
    //--- 通貨ペアを構成する通貨(主要8通貨のみ)。金・指数・暗号資産は決済通貨(USD等)を使う
@@ -206,26 +213,34 @@ double EVI_RatioAt(const datetime Tp)
    return (hi - lo) / a[0];
   }
 
-int EVI_CacheIndex(const ulong id)
+int EVI_CacheIndex(const ulong id, const datetime t)
   {
    int n = ArraySize(g_eviCacheId);
    for(int i = 0; i < n; i++)
-      if(g_eviCacheId[i] == id)
+      if(g_eviCacheId[i] == id && g_eviCacheTime[i] == t)
          return i;
    return -1;
   }
 
-//--- 指標1件について、過去の発表の値動きを評価してキャッシュに保存する
-void EVI_EvaluateEvent(const ulong id)
+//--- 発表時刻Tの指標について評価する
+//---   前回の動き: Tより前の発表のうち、直近 EVI_HistReleases 回の値幅倍率
+//---   今回の動き: この発表自体の値幅倍率(発表から十分な時間が経っている場合のみ)
+void EVI_EvaluateEvent(const ulong id, const datetime T)
   {
    double last = -1.0;
    double avg  = -1.0;
+   double actual = -1.0;
    int    cnt  = 0;
    datetime now = TimeTradeServer();
+   int w = MathMax(5, EVI_ImpactWindowMin);
+   datetime limit = now - (datetime)(w * 60 + 300);   // これより前の発表なら、発表後の値動きが確定している
+
+   //--- Tより前の発表だけを対象にする(その発表自体の動きは判定に含めない) ---
+   datetime to = T - 60;
+   if(to > limit) to = limit;
+   datetime from = now - (datetime)(400 * 86400);
 
    MqlCalendarValue hist[];
-   datetime from = now - (datetime)(400 * 86400);
-   datetime to   = now - (datetime)(EVI_ImpactWindowMin * 60 + 300);   // 発表からの時間が足りないものは除く
    if(CalendarValueHistoryByEvent(id, hist, from, to))
      {
       int total = ArraySize(hist);
@@ -250,24 +265,54 @@ void EVI_EvaluateEvent(const ulong id)
          avg = sum / cnt;
      }
 
-   //--- 算出できなかった場合は、少し後(2分後)に再試行する
-   datetime stamp = (cnt > 0) ? now : now - (datetime)(12 * 3600) + 120;
+   //--- この発表自体の値動き ---
+   if(T <= limit)
+      actual = EVI_RatioAt(T);
 
-   int ci = EVI_CacheIndex(id);
+   int ci = EVI_CacheIndex(id, T);
    if(ci < 0)
      {
       ci = ArraySize(g_eviCacheId);
-      ArrayResize(g_eviCacheId,    ci + 1);
-      ArrayResize(g_eviCacheLast,  ci + 1);
-      ArrayResize(g_eviCacheAvg,   ci + 1);
-      ArrayResize(g_eviCacheN,     ci + 1);
-      ArrayResize(g_eviCacheStamp, ci + 1);
-      g_eviCacheId[ci] = id;
+      ArrayResize(g_eviCacheId,     ci + 1);
+      ArrayResize(g_eviCacheTime,   ci + 1);
+      ArrayResize(g_eviCacheLast,   ci + 1);
+      ArrayResize(g_eviCacheAvg,    ci + 1);
+      ArrayResize(g_eviCacheN,      ci + 1);
+      ArrayResize(g_eviCacheActual, ci + 1);
+      ArrayResize(g_eviCacheTries,  ci + 1);
+      ArrayResize(g_eviCacheStamp,  ci + 1);
+      g_eviCacheId[ci]    = id;
+      g_eviCacheTime[ci]  = T;
+      g_eviCacheTries[ci] = 0;
      }
-   g_eviCacheLast[ci]  = last;
-   g_eviCacheAvg[ci]   = avg;
-   g_eviCacheN[ci]     = cnt;
-   g_eviCacheStamp[ci] = stamp;
+   g_eviCacheLast[ci]   = last;
+   g_eviCacheAvg[ci]    = avg;
+   g_eviCacheN[ci]      = cnt;
+   g_eviCacheActual[ci] = actual;
+   g_eviCacheTries[ci]++;
+   g_eviCacheStamp[ci]  = now;
+  }
+
+//--- この発表をいま(再)評価する必要があるか
+bool EVI_NeedEval(const int ci, const datetime T, const datetime now)
+  {
+   if(ci < 0)
+      return true;
+
+   int w = MathMax(5, EVI_ImpactWindowMin);
+   bool actualReady = (T <= now - (datetime)(w * 60 + 300));
+   bool prevOk   = (g_eviCacheN[ci] > 0);
+   bool actualOk = (!actualReady) || (g_eviCacheActual[ci] >= 0.0);
+
+   // データが足りなかったものは、2分ごとに数回だけ再試行する
+   if((!prevOk || !actualOk) && g_eviCacheTries[ci] < 4)
+      return (now - g_eviCacheStamp[ci] >= 120);
+
+   // これからの発表は、12時間ごとに前回の動きを更新する
+   if(!actualReady && now - g_eviCacheStamp[ci] >= 12 * 3600)
+      return true;
+
+   return false;
   }
 
 //+------------------------------------------------------------------+
@@ -390,22 +435,28 @@ void EVI_Refresh()
       EVI_FetchList();
      }
 
-   //--- 値動きの評価(1周期あたり EVI_EvalPerCycle 件まで) ---
+   //--- 値動きの評価(1周期あたり EVI_EvalPerCycle 件まで)。これからの発表を先に評価する ---
    int done = 0;
    int n = ArraySize(g_eviId);
-   for(int i = 0; i < n && done < MathMax(1, EVI_EvalPerCycle); i++)
+   for(int pass = 0; pass < 2; pass++)
      {
-      int ci = EVI_CacheIndex(g_eviId[i]);
-      if(ci >= 0 && now - g_eviCacheStamp[ci] < 12 * 3600)
-         continue;
-      EVI_EvaluateEvent(g_eviId[i]);
-      done++;
+      for(int i = 0; i < n && done < MathMax(1, EVI_EvalPerCycle); i++)
+        {
+         bool upcoming = (g_eviTime[i] >= now - 3600);
+         if((pass == 0) != upcoming)
+            continue;
+         int ci = EVI_CacheIndex(g_eviId[i], g_eviTime[i]);
+         if(!EVI_NeedEval(ci, g_eviTime[i], now))
+            continue;
+         EVI_EvaluateEvent(g_eviId[i], g_eviTime[i]);
+         done++;
+        }
      }
 
    int ev = 0;
    for(int i = 0; i < n; i++)
      {
-      int ci = EVI_CacheIndex(g_eviId[i]);
+      int ci = EVI_CacheIndex(g_eviId[i], g_eviTime[i]);
       if(ci >= 0 && g_eviCacheN[ci] > 0)
          ev++;
      }
@@ -420,20 +471,27 @@ string EVI_StatusText() { return g_eviStatus; }
 
 double EVI_LastRatio(const int i)
   {
-   int ci = EVI_CacheIndex(g_eviId[i]);
+   int ci = EVI_CacheIndex(g_eviId[i], g_eviTime[i]);
    return (ci >= 0) ? g_eviCacheLast[ci] : -1.0;
   }
 
 double EVI_AvgRatio(const int i)
   {
-   int ci = EVI_CacheIndex(g_eviId[i]);
+   int ci = EVI_CacheIndex(g_eviId[i], g_eviTime[i]);
    return (ci >= 0) ? g_eviCacheAvg[ci] : -1.0;
   }
 
 int EVI_ValidN(const int i)
   {
-   int ci = EVI_CacheIndex(g_eviId[i]);
+   int ci = EVI_CacheIndex(g_eviId[i], g_eviTime[i]);
    return (ci >= 0) ? g_eviCacheN[ci] : 0;
+  }
+
+//--- この発表自体の値動き(倍率)。発表から時間が経っていない場合や算出不能の場合は -1
+double EVI_ActualRatio(const int i)
+  {
+   int ci = EVI_CacheIndex(g_eviId[i], g_eviTime[i]);
+   return (ci >= 0) ? g_eviCacheActual[ci] : -1.0;
   }
 
 //--- 表示クラス: 2=重要(赤) / 1=その他で大きく動く / 0=表示しない

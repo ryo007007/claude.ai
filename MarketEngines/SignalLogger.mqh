@@ -53,6 +53,10 @@ int      SLG_stH[];
 int      SLG_stN[];
 int      SLG_stHit[];
 double   SLG_stSum[];
+int      SLG_stDirN[];     // 方向つきシグナル(features に sig=up/down があるもの)の件数
+int      SLG_stFav[];      // そのうち、期待方向に HitATR 以上動いた件数
+int      SLG_stAdv[];      // そのうち、逆方向に HitATR 以上動いた件数
+double   SLG_stFavSum[];   // 期待方向への最大変動の合計(ATR倍)
 string   SLG_statLines[];
 
 int      SLG_horizons[];
@@ -123,11 +127,19 @@ int SLG_StatIndex(const string type, const int H)
    ArrayResize(SLG_stN,    n + 1);
    ArrayResize(SLG_stHit,  n + 1);
    ArrayResize(SLG_stSum,  n + 1);
+   ArrayResize(SLG_stDirN, n + 1);
+   ArrayResize(SLG_stFav,  n + 1);
+   ArrayResize(SLG_stAdv,  n + 1);
+   ArrayResize(SLG_stFavSum, n + 1);
    SLG_stType[n] = type;
    SLG_stH[n]    = H;
    SLG_stN[n]    = 0;
    SLG_stHit[n]  = 0;
    SLG_stSum[n]  = 0.0;
+   SLG_stDirN[n] = 0;
+   SLG_stFav[n]  = 0;
+   SLG_stAdv[n]  = 0;
+   SLG_stFavSum[n] = 0.0;
    return n;
   }
 
@@ -141,6 +153,15 @@ void SLG_BuildStatLines()
       double avgExc  = (SLG_stN[i] > 0) ? SLG_stSum[i] / SLG_stN[i] : 0.0;
       SLG_statLines[i] = StringFormat("%s %d本後: n=%d  %.1fATR以上動いた %.0f%%  平均最大変動 %.2fATR",
                                       SLG_stType[i], SLG_stH[i], SLG_stN[i], SLG_HitATR, hitRate, avgExc);
+      // 方向つきシグナル(ウォルフなど)は、期待方向と逆行を分けて表示する
+      if(SLG_stDirN[i] > 0)
+        {
+         double fav = (double)SLG_stFav[i] / SLG_stDirN[i] * 100.0;
+         double adv = (double)SLG_stAdv[i] / SLG_stDirN[i] * 100.0;
+         SLG_statLines[i] = StringFormat("%s %d本後: n=%d  順方向%.1fATR以上 %.0f%% / 逆行%.1fATR以上 %.0f%%  平均順方向 %.2fATR",
+                                         SLG_stType[i], SLG_stH[i], SLG_stDirN[i], SLG_HitATR, fav,
+                                         SLG_HitATR, adv, SLG_stFavSum[i] / SLG_stDirN[i]);
+        }
      }
   }
 
@@ -154,6 +175,10 @@ void SLG_ReadResults(const bool fillDone)
    ArrayResize(SLG_stN,    0);
    ArrayResize(SLG_stHit,  0);
    ArrayResize(SLG_stSum,  0);
+   ArrayResize(SLG_stDirN, 0);
+   ArrayResize(SLG_stFav,  0);
+   ArrayResize(SLG_stAdv,  0);
+   ArrayResize(SLG_stFavSum, 0);
    if(fillDone)
       ArrayResize(SLG_done, 0);
 
@@ -188,6 +213,23 @@ void SLG_ReadResults(const bool fillDone)
       if(maxExc >= SLG_HitATR)
          SLG_stHit[si]++;
       SLG_stSum[si] += maxExc;
+
+      // features に sig=up / sig=down があるものは、期待方向と逆行を分けて集計する
+      string feat = (n >= 13) ? f[12] : "";
+      int sigDir = 0;
+      if(StringFind(feat, "sig=up") >= 0)        sigDir = 1;
+      else if(StringFind(feat, "sig=down") >= 0) sigDir = -1;
+      if(sigDir != 0)
+        {
+         double upAtr = StringToDouble(f[9]);
+         double dnAtr = StringToDouble(f[10]);
+         double fav = (sigDir > 0) ? upAtr : dnAtr;
+         double adv = (sigDir > 0) ? dnAtr : upAtr;
+         SLG_stDirN[si]++;
+         if(fav >= SLG_HitATR) SLG_stFav[si]++;
+         if(adv >= SLG_HitATR) SLG_stAdv[si]++;
+         SLG_stFavSum[si] += fav;
+        }
      }
    FileClose(h);
    SLG_BuildStatLines();
