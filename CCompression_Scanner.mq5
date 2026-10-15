@@ -22,6 +22,7 @@
 #include "MarketEngines/RelatedPairEngine.mqh"     // 関連通貨エンジン(予兆スコア)
 #include "MarketEngines/TDSequentialEngine.mqh"    // TDシーケンシャルエンジン
 #include "MarketEngines/WolfeWaveEngine.mqh"        // ウォルフ波動エンジン
+#include "MarketEngines/IchimokuEngine.mqh"          // 一目均衡表エンジン
 
 //---------------- 入力パラメータ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
@@ -108,6 +109,10 @@ datetime        g_tdBar[];
 // ウォルフ波動の結果(g_scanと同じ添字)と、最後に計算した確定足の時刻
 WLF_Result      g_wlf[];
 datetime        g_wlfBar[];
+
+// 一目均衡表の結果(g_scanと同じ添字)と、最後に計算した確定足の時刻
+ICH_Result      g_ich[];
+datetime        g_ichBar[];
 
 void DrawDetailPanel();   // 解説パネル描画(定義はファイル末尾)
 void DrawStatsPanel();    // 検証パネル描画(定義はファイル末尾)
@@ -266,6 +271,8 @@ int OnInit()
    ArrayResize(g_tdBar, g_scanTotal);
    ArrayResize(g_wlf,    g_scanTotal);
    ArrayResize(g_wlfBar, g_scanTotal);
+   ArrayResize(g_ich,    g_scanTotal);
+   ArrayResize(g_ichBar, g_scanTotal);
    for(int tk = 0; tk < g_scanTotal; tk++)
      {
       g_tdBar[tk]      = 0;
@@ -274,6 +281,8 @@ int OnInit()
       g_wlfBar[tk]     = 0;
       g_wlf[tk].ready  = false;
       g_wlf[tk].found  = false;
+      g_ichBar[tk]     = 0;
+      g_ich[tk].ready  = false;
      }
    for(int k = 0; k < g_scanTotal; k++)
      {
@@ -376,6 +385,17 @@ void UpdateAndDraw()
         }
      }
 
+   //--- 一目均衡表(確定足が更新された行だけ計算する) ---
+   if(ICH_Enable)
+     {
+      for(int i = 0; i < g_scanTotal; i++)
+        {
+         if(!g_scan[i].ready || g_scan[i].lastBarTime == g_ichBar[i]) continue;
+         if(ICH_Compute(g_scan[i].symbol, g_scan[i].tf, g_ich[i]))
+            g_ichBar[i] = g_scan[i].lastBarTime;
+        }
+     }
+
    //--- ウォルフ波動(確定足が更新された行だけ計算する) ---
    if(WLF_Enable)
      {
@@ -405,6 +425,8 @@ void UpdateAndDraw()
                      + ";comp_score=" + IntegerToString(g_scan[i].score);
          if(TDS_Enable && g_td[i].ready)
             feat += ";" + TDS_Feat(g_td[i]) + ";td_align=" + (tdAlign ? "1" : "0");
+         if(ICH_Enable && g_ich[i].ready)
+            feat += ";" + ICH_Feat(g_ich[i]);
 
          //--- 検証ログ: 単独 / +TD / +TD+反転足 を別の種類として記録し、成績を比べられるようにする ---
          if(SLG_IsOn())
@@ -477,7 +499,17 @@ void UpdateAndDraw()
       if(TDS_Enable && g_td[i].ready)
          feat += ";" + TDS_Feat(g_td[i]);
 
+      // 一目均衡表が、直近の雲抜け/TKクロス(三役の裏づけつき)で解除の方向を示しているか
+      bool ichCombo = (ICH_Enable && ICH_HasRelease(g_ich[i]));
+      if(ICH_Enable && g_ich[i].ready)
+         feat += ";" + ICH_Feat(g_ich[i]);
+
       SLG_LogEvent("TRANSITION", g_scan[i].symbol, g_scan[i].tf, closeT, px, atrAbs, feat);
+      // 一目の解除方向が重なった場合は、方向つき(sig=)で別の種類として記録する。
+      // 検証パネルに「順方向/逆行」が出るので、一目の方向が当たるかを確かめられる
+      if(ichCombo)
+         SLG_LogEvent("TRANSITION+ICHI", g_scan[i].symbol, g_scan[i].tf, closeT, px, atrAbs,
+                      feat + ";sig=" + (g_ich[i].relDir > 0 ? "up" : "down"));
       // TDと重なった場合だけ別の種類としても記録する(重ならない場合と成績を比べるため)
       if(tdCombo)
          SLG_LogEvent("TRANSITION+TD", g_scan[i].symbol, g_scan[i].tf, closeT, px, atrAbs, feat);
@@ -497,6 +529,12 @@ void UpdateAndDraw()
                                 g_scan[i].symbol, TFName(g_scan[i].tf),
                                 TDS_DirChar(g_td[i].recentDir), g_td[i].recentKind, g_td[i].recentAgo,
                                 g_scan[i].score));
+        }
+      if(ichCombo && ICH_AlertOnCombo && SAL_OnTransition && nowT <= closeT + 2 * ps &&
+         SAL_FireOnce(GVKey(i, "ATI"), (double)g_scan[i].lastBarTime))
+        {
+         SAL_Queue(StringFormat("【圧縮解除+一目 %s】%s %s Score%d",
+                                ICH_RelText(g_ich[i]), g_scan[i].symbol, TFName(g_scan[i].tf), g_scan[i].score));
         }
      }
 
@@ -566,6 +604,9 @@ void UpdateAndDraw()
                bool tdAlign = (TDS_Enable && TDS_IsReversalAligned(g_td[i], isUp));
                if(TDS_Enable && g_td[i].ready)
                   feat += ";" + TDS_Feat(g_td[i]) + ";td_align=" + (tdAlign ? "1" : "0");
+
+               if(ICH_Enable && g_ich[i].ready)
+                  feat += ";" + ICH_Feat(g_ich[i]);
 
                SLG_LogEvent("SPIKE", g_scan[i].symbol, g_scan[i].tf, nowT, px, sp.atrAvg, feat);
                if(tdAlign)
@@ -720,6 +761,8 @@ void UpdateAndDraw()
            }
          if(WLF_Enable && WLF_ShowInList)
             line += WLF_Text(g_wlf[idx]);
+         if(ICH_Enable && ICH_ShowInList)
+            line += ICH_Text(g_ich[idx]);
         }
       else if(candKind[r] == 2)
         {
@@ -732,6 +775,8 @@ void UpdateAndDraw()
             if(g_td[idx].recent && g_td[idx].recentDir == -g_wlf[idx].dir)
                line += " ★TD整合";
            }
+         if(ICH_Enable && ICH_ShowInList)
+            line += ICH_Text(g_ich[idx]);
          rowClr = (g_wlf[idx].dir > 0) ? WLF_ColorBuy : WLF_ColorSell;
         }
       else
@@ -759,6 +804,12 @@ void UpdateAndDraw()
            }
          if(WLF_Enable && WLF_ShowInList)
             line += WLF_Text(g_wlf[idx]);
+         if(ICH_Enable && ICH_ShowInList)
+           {
+            line += ICH_Text(g_ich[idx]);
+            if(inst.state == CCOMP_TRANSITION && ICH_HasRelease(g_ich[idx]))
+               line += " ★一目の解除方向あり";   // 圧縮解除と、一目の解除方向が重なっている
+           }
         }
 
       DrawRow(r, line, rowClr);
@@ -1127,6 +1178,41 @@ void DrawDetailPanel()
                judge = "ウォルフP5確定のみ(TD完了は重なっていません)";
             lines[L] = "  判定: " + judge;
             clrs[L]  = (w.state == 2 && tdAl) ? clrAqua : base; L++;
+           }
+        }
+
+      // 一目均衡表
+      if(ICH_Enable && g_ich[idx].ready)
+        {
+         ICH_Result ic = g_ich[idx];
+         string posTxt = (ic.pos > 0) ? "雲の上" : ((ic.pos < 0) ? "雲の下" : "雲の中");
+         lines[L] = StringFormat("  一目均衡表: 価格は%s  雲の厚み%.2f%%(過去%d本中 下位%.0f%%)%s  基準線%s  転換線-基準線 %.1fATR  一目の圧縮度 %d/4",
+                                 posTxt, ic.thickPct, ICH_PctBars, ic.thickPctile, ic.thin ? "=薄い" : "",
+                                 ic.kijunFlat ? "は横ばい" : "は傾き有り", ic.tkDistATR, ic.score);
+         clrs[L]  = base; L++;
+
+         lines[L] = StringFormat("  三役: 好転%d/3 逆転%d/3  遅行スパン:%s  先行スパンのねじれ(26本先まで):%s",
+                                 ic.bullRoles, ic.bearRoles,
+                                 ic.chikou > 0 ? "26本前の価格より上" : (ic.chikou < 0 ? "26本前の価格より下" : "同じ"),
+                                 ic.twistAhead ? "あり" : "なし");
+         clrs[L]  = base; L++;
+
+         if(ic.relKind != 0)
+           {
+            lines[L] = StringFormat("  解除の方向: %s(%d本前)  ※三役が%d以上その方向に揃っているものだけを数えています",
+                                    ICH_RelText(ic), ic.relAgo, ICH_MinRoles);
+            clrs[L]  = (ic.relDir > 0) ? WLF_ColorBuy : WLF_ColorSell; L++;
+           }
+
+         if(inst.state == CCOMP_TRANSITION && ic.relKind != 0)
+           {
+            lines[L] = "  判定: 圧縮解除(TRANSITION) + 一目の解除方向 → 解除の方向の裏づけがあります";
+            clrs[L]  = clrAqua; L++;
+           }
+         else if(inst.state != CCOMP_NORMAL && ic.thin && ic.pos == 0)
+           {
+            lines[L] = "  判定: 一目均衡表も圧縮を示しています(薄い雲の中に価格がある)";
+            clrs[L]  = base; L++;
            }
         }
 
