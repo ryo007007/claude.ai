@@ -22,3 +22,5 @@ Thumbs.db
 
 # Excelやシステムが自動生成する一時ファイルも除外
 ~$*.xls*
+
+Verification log/
