@@ -114,6 +114,9 @@ datetime        g_wlfBar[];
 ICH_Result      g_ich[];
 datetime        g_ichBar[];
 
+// 基準(対照)を最後に判定した確定足の時刻(g_scanと同じ添字)
+datetime        g_baseBar[];
+
 void DrawDetailPanel();   // 解説パネル描画(定義はファイル末尾)
 void DrawStatsPanel();    // 検証パネル描画(定義はファイル末尾)
 void DrawWolfeChart();    // ウォルフ波動のチャート描画(定義はファイル末尾)
@@ -273,6 +276,7 @@ int OnInit()
    ArrayResize(g_wlfBar, g_scanTotal);
    ArrayResize(g_ich,    g_scanTotal);
    ArrayResize(g_ichBar, g_scanTotal);
+   ArrayResize(g_baseBar, g_scanTotal);
    for(int tk = 0; tk < g_scanTotal; tk++)
      {
       g_tdBar[tk]      = 0;
@@ -283,6 +287,7 @@ int OnInit()
       g_wlf[tk].found  = false;
       g_ichBar[tk]     = 0;
       g_ich[tk].ready  = false;
+      g_baseBar[tk]    = 0;
      }
    for(int k = 0; k < g_scanTotal; k++)
      {
@@ -473,6 +478,40 @@ void UpdateAndDraw()
             g_immUp[k]    = g_spikeUp[idx];
            }
    }
+
+   //--- 基準(対照)の記録 ---
+   //--- 圧縮やシグナルと無関係に、確定足を無作為に抜き出して記録する。
+   //--- シグナルの成績が「何もない時の動き」より良いかを比べるための対照。
+   //--- BASE      : すべての確定足から SLG_BaseRate の割合で抜き出す
+   //--- BASE_COMP : 圧縮中の確定足から SLG_BaseCompRate の割合で抜き出す(圧縮解除・急変との公平な比較用)
+   if(SLG_IsOn())
+     {
+      for(int i = 0; i < g_scanTotal; i++)
+        {
+         if(!g_scan[i].ready || g_scan[i].lastBarTime == g_baseBar[i]) continue;
+         g_baseBar[i] = g_scan[i].lastBarTime;
+
+         int tfSecB = PeriodSeconds(g_scan[i].tf);
+         bool compB = (g_scan[i].state == CCOMP_COMPRESSION || g_scan[i].state == CCOMP_STRONG_COMPRESSION
+                       || g_scan[i].state == CCOMP_TIGHT_COMPRESSION);
+         bool takeA = SLG_Sample(g_scan[i].symbol, tfSecB, g_scan[i].lastBarTime, SLG_BaseRate, 1);
+         bool takeB = compB && SLG_Sample(g_scan[i].symbol, tfSecB, g_scan[i].lastBarTime, SLG_BaseCompRate, 2);
+         if(!takeA && !takeB) continue;
+
+         double pxB = iClose(g_scan[i].symbol, g_scan[i].tf, 1);
+         if(pxB <= 0.0) continue;
+         double atrB = g_scan[i].atrPct / 100.0 * pxB;
+         datetime closeB = g_scan[i].lastBarTime + tfSecB;
+         string featB = StringFormat("score=%d;state=%s;delta=%d;age=%d;atr_p=%.0f;bb_p=%.0f;rng_p=%.0f;adx=%.1f;kc=%d;nr=%d",
+                                     g_scan[i].score, CCOMP_StateShort(g_scan[i].state), g_scan[i].delta, g_scan[i].age,
+                                     g_scan[i].atrPctile, g_scan[i].bbPctile, g_scan[i].rangePctile,
+                                     g_scan[i].adxValue, g_scan[i].kcSqueeze ? 1 : 0, g_scan[i].isNR ? 1 : 0);
+         if(takeA)
+            SLG_LogEvent("BASE", g_scan[i].symbol, g_scan[i].tf, closeB, pxB, atrB, featB);
+         if(takeB)
+            SLG_LogEvent("BASE_COMP", g_scan[i].symbol, g_scan[i].tf, closeB, pxB, atrB, featB);
+        }
+     }
 
    //--- TRANSITION(圧縮解除)の検証ログとアラート ---
    for(int i = 0; i < g_scanTotal; i++)
@@ -845,6 +884,7 @@ void UpdateAndDraw()
 
    SAL_Flush();            // ためたアラートをまとめて送信
    SLG_EvaluatePending();  // 評価時刻が来たイベントの結果を記録
+   SLG_AutoReport();       // 検証レポートの自動出力(間隔はSLG_ReportIntervalMin)
 
    ChartRedraw(0);
   }
@@ -888,6 +928,16 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       GlobalVariableSet("CCOMP_UI_STATS", g_statsOn ? 1.0 : 0.0);
       DrawStatsPanel();
       ChartRedraw(0);
+      return;
+     }
+
+   if(sparam == "CCOMP_Scan_BtnReport")
+     {
+      bool ok = SLG_WriteReport();
+      if(ok)
+         Alert("検証レポートを出力しました: MQL5\\Files\\" + SLG_ReportPath());
+      else
+         Alert("検証レポートを出力できませんでした(検証ログが初期化されていない、または書き込めません)");
       return;
      }
 
@@ -1276,6 +1326,7 @@ void DrawStatsPanel()
    DrawUiButton("CCOMP_Scan_BtnLog", StatsX + 132,
                 g_logOn ? "ログ記録: ON" : "ログ記録: OFF",
                 g_logOn ? C'40,90,40' : C'110,40,40');
+   DrawUiButton("CCOMP_Scan_BtnReport", StatsX + 264, "レポート出力", C'40,70,110');
 
    if(!g_statsOn)
      {
