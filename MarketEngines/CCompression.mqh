@@ -71,6 +71,12 @@ struct CCOMP_Instance
    bool           kcSqueeze;     // BBがケルトナーチャネルの内側に入っている(スクイーズ)
    bool           isNR;          // 直近CCOMP_NR_Period本の中で最も狭いレンジの足
 
+   //--- 検証用の対照(BASE_RISE)を作るための情報: TRANSITIONの条件を1つずつ確認できるようにする
+   CCOMP_STATE    prevBarState;  // 1本前の確定足の状態
+   int            prevBarScore;  // 1本前の確定足のScore(-1=なし)
+   bool           atrRising;     // ATR%が1本前より上昇している
+   bool           bbRising;      // BB幅%が1本前より上昇している
+
    int            atrScore;
    int            bbScore;
    int            rangeScore;
@@ -109,6 +115,10 @@ bool CCOMP_InitInstance(CCOMP_Instance &inst, const string symbol, const ENUM_TI
    inst.rangePctile     = 0.0;
    inst.kcSqueeze       = false;
    inst.isNR            = false;
+   inst.prevBarState    = CCOMP_NORMAL;
+   inst.prevBarScore    = -1;
+   inst.atrRising       = false;
+   inst.bbRising        = false;
    inst.atrScore = inst.bbScore = inst.rangeScore = inst.adxScore = inst.score = 0;
    inst.prevScore       = 0;
    inst.prevATRPct      = 0.0;
@@ -318,6 +328,13 @@ bool CCOMP_UpdateInstance(CCOMP_Instance &inst)
       delta = (prevScore >= 0) ? (total - prevScore) : 0;
       age   = (k == R) ? 1 : ((st == prevState) ? age + 1 : 1);
 
+      if(k == 0)
+        {
+         // 最新の足を処理した時点で、「1本前の足」の状態と Score を控える
+         inst.prevBarState = prevState;
+         inst.prevBarScore = prevScore;
+        }
+
       prevScore = total;
       prevState = st;
      }
@@ -349,6 +366,8 @@ bool CCOMP_UpdateInstance(CCOMP_Instance &inst)
    inst.rangePctile = pcR;
    inst.kcSqueeze   = kcSq;
    inst.isNR        = nrFlag;
+   inst.atrRising   = (atrPctArr[0] > atrPctArr[1]);
+   inst.bbRising    = (bbPctArr[0]  > bbPctArr[1]);
    inst.atrScore    = sA;
    inst.bbScore     = sB;
    inst.rangeScore  = sR;

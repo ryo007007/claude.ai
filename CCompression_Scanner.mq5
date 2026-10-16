@@ -208,6 +208,17 @@ void SaveSuppressed(const int i, const bool on)
       GlobalVariableDel(k);
   }
 
+//--- 同じ行・同じ種類のイベントを、SpikeHoldBars本の間は再記録しない(連続する急変を1つとして数える)
+//--- 端末のグローバル変数に期限を保存するので、チャートの切替で読み込み直されても重複しない
+bool EpisodeFire(const int i, const string field, const datetime now)
+  {
+   string key = GVKey(i, field);
+   if(GlobalVariableCheck(key) && GlobalVariableGet(key) > (double)now)
+      return false;
+   GlobalVariableSet(key, (double)(now + (datetime)(SpikeHoldBars * PeriodSeconds(g_scan[i].tf))));
+   return true;
+  }
+
 void LoadSpikeStates()
   {
    datetime now = TimeCurrent();
@@ -496,7 +507,18 @@ void UpdateAndDraw()
                        || g_scan[i].state == CCOMP_TIGHT_COMPRESSION);
          bool takeA = SLG_Sample(g_scan[i].symbol, tfSecB, g_scan[i].lastBarTime, SLG_BaseRate, 1);
          bool takeB = compB && SLG_Sample(g_scan[i].symbol, tfSecB, g_scan[i].lastBarTime, SLG_BaseCompRate, 2);
-         if(!takeA && !takeB) continue;
+
+         // BASE_RISE: TRANSITIONの条件のうち「Scoreが下がる」だけを満たさない足。
+         //   前の足が強い圧縮(STRONG/TIGHT)で、ATR%かBB幅が上昇していて、Scoreは下がっていない。
+         //   「ボラが戻り始めたから動く」という当たり前の性質と、解除の検出の効果を区別するための対照。
+         bool prevStrong = (g_scan[i].prevBarState == CCOMP_STRONG_COMPRESSION
+                            || g_scan[i].prevBarState == CCOMP_TIGHT_COMPRESSION);
+         bool scoreFell  = (g_scan[i].prevBarScore >= 0 && g_scan[i].score < g_scan[i].prevBarScore);
+         bool riseB = (prevStrong && (g_scan[i].atrRising || g_scan[i].bbRising)
+                       && !scoreFell && g_scan[i].state != CCOMP_TRANSITION);
+         bool takeC = riseB && SLG_Sample(g_scan[i].symbol, tfSecB, g_scan[i].lastBarTime, SLG_BaseRiseRate, 3);
+
+         if(!takeA && !takeB && !takeC) continue;
 
          double pxB = iClose(g_scan[i].symbol, g_scan[i].tf, 1);
          if(pxB <= 0.0) continue;
@@ -510,6 +532,8 @@ void UpdateAndDraw()
             SLG_LogEvent("BASE", g_scan[i].symbol, g_scan[i].tf, closeB, pxB, atrB, featB);
          if(takeB)
             SLG_LogEvent("BASE_COMP", g_scan[i].symbol, g_scan[i].tf, closeB, pxB, atrB, featB);
+         if(takeC)
+            SLG_LogEvent("BASE_RISE", g_scan[i].symbol, g_scan[i].tf, closeB, pxB, atrB, featB);
         }
      }
 
@@ -596,6 +620,24 @@ void UpdateAndDraw()
          SMD_SpikeInfo sp;
          if(!SMD_CheckSpikeV2(g_scan[i].symbol, g_scan[i].tf, g_scan[i].atrHandle, sp))
             continue;
+
+         // 急変の旧判定(V1)と新判定(V2)を、どちらを使うか(UseSpikeV2)とは無関係に、それぞれ独立に記録する。
+         // 両方の成績を同じ基準と比べられる(V1だけが反応した足も残る)
+         if(SLG_IsOn() && (sp.v1Spike || sp.isSpike) && sp.atrAvg > 0.0)
+           {
+            double pxV = SymbolInfoDouble(g_scan[i].symbol, SYMBOL_BID);
+            if(pxV > 0.0)
+              {
+               string featV = StringFormat("dir=%s;atr_ratio=%.2f;atr_ratio_v1=%.2f;z_v1=%.2f;z_robust=%.2f;eff=%.2f;v1=%d;v2=%d;state=%s;score=%d",
+                                           sp.isUp ? "up" : "down", sp.atrRatio, sp.atrRatioV1, sp.rocZ, sp.robustZ, sp.efficiency,
+                                           sp.v1Spike ? 1 : 0, sp.isSpike ? 1 : 0,
+                                           CCOMP_StateShort(g_scan[i].state), g_scan[i].score);
+               if(sp.v1Spike && EpisodeFire(i, "SV1", nowT))
+                  SLG_LogEvent("SPIKE_V1", g_scan[i].symbol, g_scan[i].tf, nowT, pxV, sp.atrAvg, featV);
+               if(sp.isSpike && EpisodeFire(i, "SV2", nowT))
+                  SLG_LogEvent("SPIKE_V2", g_scan[i].symbol, g_scan[i].tf, nowT, pxV, sp.atrAvg, featV);
+              }
+           }
 
          bool   isSp  = UseSpikeV2 ? sp.isSpike : sp.v1Spike;
          bool   isUp  = sp.isUp;
