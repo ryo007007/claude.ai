@@ -208,15 +208,16 @@ void SaveSuppressed(const int i, const bool on)
       GlobalVariableDel(k);
   }
 
-//--- 同じ行・同じ種類のイベントを、SpikeHoldBars本の間は再記録しない(連続する急変を1つとして数える)
+//--- 同じ行・同じ種類のイベントを、続けて記録しない(連続する急変を1つの急変として数える)
+//--- 検知が続いている間は、期限を延ばし続ける。検知が SpikeHoldBars 本の間途切れた時に初めて、次の急変として記録する。
+//--- (期限を延ばさないと、長く続く急変を SpikeHoldBars 本ごとに何度も記録してしまう)
 //--- 端末のグローバル変数に期限を保存するので、チャートの切替で読み込み直されても重複しない
 bool EpisodeFire(const int i, const string field, const datetime now)
   {
    string key = GVKey(i, field);
-   if(GlobalVariableCheck(key) && GlobalVariableGet(key) > (double)now)
-      return false;
+   bool active = (GlobalVariableCheck(key) && GlobalVariableGet(key) > (double)now);
    GlobalVariableSet(key, (double)(now + (datetime)(SpikeHoldBars * PeriodSeconds(g_scan[i].tf))));
-   return true;
+   return !active;
   }
 
 void LoadSpikeStates()
