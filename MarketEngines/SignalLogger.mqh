@@ -30,6 +30,7 @@
 //|    イベントは、同じ値動きを見ているので、通貨ペアが違っても1つの塊と    |
 //|    数える。この塊の数を「実効件数」とし、信頼区間と検定に使う。        |
 //|    (最初のイベントから評価期間の長さの窓を作り、窓に入るものを同じ塊に) |
+//|    「全時間足」の実効件数は、時間足ごとの塊の数の合計とする。           |
 //|  ・急変(SPIKE系)は、同じ銘柄・時間足で SLG_EpisodeBars 本以内に続けて   |
 //|    記録されたものを、1つの急変として数える(続く急変の重複の掃除)。      |
 //|  ・比較の相手(基準)は、シグナルの種類ごとに決める。                  |
@@ -57,8 +58,11 @@ input int    SLG_MinN            = 30;              // レポートで「判定�
 input int    SLG_EpisodeBars     = 4;               // 急変(SPIKE系)を「続き」とみなす間隔(本数)。同じ銘柄・時間足でこの本数以内に続けて記録されたものは1つと数える
 input int    SLG_ReportIntervalMin = 30;            // レポートの自動出力間隔(分)。0=自動では出さない(ボタンで出力)
 
+//--- 版の表示(レポートの先頭に出る。どの版で出力したレポートかを区別するため)
+#define SLG_VERSION "v2.3"
+#define SLG_VERSION_NOTE "全時間足の実効件数=時間足ごとの塊の合計 / 比較相手を固定 / 急変は検知した次の分から評価"
 #define SLG_EV_HEADER "id,type,symbol,tf_sec,time,price,atr,features"
-#define SLG_RS_HEADER "id,type,symbol,tf_sec,event_time,price,atr,horizon,close_atr,max_up_atr,max_down_atr,max_exc_atr,features"
+#define SLG_RS_HEADER "id,type,symbol,tf_sec,event_time,price,atr,horizon,close_atr,max_up_atr,max_down_atr,max_exc_atr,features,eval_ver"
 
 //--- イベント(メモリ上)
 string   SLG_evId[];
@@ -352,19 +356,24 @@ bool SLG_GetBase(const string type, const int tfSec, const int H,
    string chain[];
    int nc = SLG_BaseChain(type, chain);
    int best = -1;
+   int firstAvail = -1;
    for(int c = 0; c < nc; c++)
      {
       int bi = SLG_FindStat(chain[c], tfSec, H);
       if(bi < 0 || SLG_stN[bi] <= 0)
          continue;
+      if(firstAvail < 0)
+         firstAvail = bi;
       if(SLG_stEff[bi] >= SLG_MinN)
         {
          best = bi;
          break;
         }
-      if(best < 0 || SLG_stEff[bi] > SLG_stEff[best])
-         best = bi;
      }
+   // どれも実効件数が足りない時は、最も優先順位の高いものを使う。
+   // (件数の多いものに切り替えると、評価本数ごとに比較の相手が入れ替わり、本数の間で比べられなくなるため)
+   if(best < 0)
+      best = firstAvail;
    if(best < 0)
       return false;
    nBase = SLG_stN[best];
@@ -663,6 +672,18 @@ void SLG_ReadResults(const bool fillDone)
          continue;
 
       int H = (int)StringToInteger(f[7]);
+
+      // 検知した時刻が分の途中のイベント(急変)は、旧方式(検知した分の足から評価)の結果に、
+      // 検知前の値動きが含まれている。新方式(次の分から評価)の行(行末の版=2)だけを使い、
+      // 旧方式の行は無視して、評価し直す(評価済みとして記録しない)
+      datetime evT = (datetime)StringToInteger(f[4]);
+      if(((long)evT % 60) != 0)
+        {
+         string ver = (n >= 14) ? f[13] : "";
+         if(ver != "2")
+            continue;
+        }
+
       if(fillDone)
          SLG_AddDone(f[0] + "|" + IntegerToString(H));
       if(SLG_MapFind(SLG_dpKeys, f[0]) >= 0)
@@ -705,19 +726,12 @@ void SLG_ReadResults(const bool fillDone)
    //--- 2回目: 全本数が揃ったイベントだけを、時刻順に集計する ---
    int nH = MathMax(1, ArraySize(SLG_horizons));
 
-   // 「全時間足」の集計では、含まれる最長の時間足を、時間窓の長さに使う(種類×本数ごと)
-   string mtKeys[];
-   int    mtVals[];
-   int    mtCnt = 0;
    double ord[];
    int    nOrd = 0;
    for(int r = 0; r < rN; r++)
      {
       if(SLG_MapGet(cKeys, cVals, rId[r], 0) < nH)
          continue;   // 評価が途中のイベントは入れない(本数の間で対象を揃えるため)
-      string mk = rType[r] + "|" + IntegerToString(rH[r]);
-      if(rTf[r] > SLG_MapGet(mtKeys, mtVals, mk, 0))
-         SLG_MapPut(mtKeys, mtVals, mtCnt, mk, rTf[r]);
       // 時刻順に並べるためのキー(時刻×100万 + 行番号)。倍精度で正確に表せる範囲に収まる
       ArrayResize(ord, nOrd + 1, 1024);
       ord[nOrd] = (double)rTime[r] * 1000000.0 + (double)(r % 1000000);
@@ -733,21 +747,21 @@ void SLG_ReadResults(const bool fillDone)
       datetime tm = rTime[r];
 
       //--- 実効件数: 最初のイベントから「評価期間の長さ」の窓を作り、窓に入るイベントは同じ塊と数える ---
-      int maxTf = SLG_MapGet(mtKeys, mtVals, rType[r] + "|" + IntegerToString(H), tfSec);
-      int iAll = SLG_StatIndex(rType[r], 0, H);
-      bool newAll = (tm >= SLG_stWinEnd[iAll]);
-      if(newAll)
-         SLG_stWinEnd[iAll] = tm + (datetime)(H * MathMax(1, maxTf));
-      SLG_StatAdd(iAll, H, rMax[r], rUp[r], rDn[r], rSig[r], newAll);
-
+      // 窓は時間足ごとに数える。「全時間足」の実効件数は、時間足ごとの塊の数の合計とする
+      // (最長の時間足の窓で全体を数えると、少数の長い時間足のイベントのせいで、短い時間足のイベントが
+      //  全部1つの塊にまとめられてしまうため)。別の時間足のイベントは別の塊と数えるので、
+      //  同じ値動きを複数の時間足で数える分だけ、やや甘くなる
+      bool newTf = false;
       if(tfSec > 0)
         {
          int iTf = SLG_StatIndex(rType[r], tfSec, H);
-         bool newTf = (tm >= SLG_stWinEnd[iTf]);
+         newTf = (tm >= SLG_stWinEnd[iTf]);
          if(newTf)
             SLG_stWinEnd[iTf] = tm + (datetime)(H * tfSec);
          SLG_StatAdd(iTf, H, rMax[r], rUp[r], rDn[r], rSig[r], newTf);
         }
+      int iAll = SLG_StatIndex(rType[r], 0, H);
+      SLG_StatAdd(iAll, H, rMax[r], rUp[r], rDn[r], rSig[r], newTf);
      }
 
    //--- 評価待ちのイベント数(全本数が揃っていないもの) ---
@@ -921,10 +935,12 @@ void SLG_EvaluatePending()
    SLG_lastEval = now;
 
    bool wrote = false;
+   bool stop = false;          // 1回の評価件数の上限に達したら、残りは次の周期に回す(画面が止まらないように)
+   int  evalCount = 0;
    int nEv = ArraySize(SLG_evId);
    int nH  = ArraySize(SLG_horizons);
 
-   for(int e = 0; e < nEv; e++)
+   for(int e = 0; e < nEv && !stop; e++)
      {
       if(SLG_evAtr[e] <= 0.0)
          continue;
@@ -941,8 +957,13 @@ void SLG_EvaluatePending()
             continue; // まだ評価期間が終わっていない
 
          //--- 基準時刻から評価終了までの1分足で、最高値・最安値・終値を求める
+         // 検知した時刻が分の途中のイベント(急変)は、その分の足を含めない(検知前の値動きを拾わないため)。
+         // 分の境目のイベント(足の確定時刻など)は、その時刻の足から評価する
+         datetime t0 = SLG_evTime[e];
+         long rem = (long)t0 % 60;
+         datetime startM1 = (rem == 0) ? t0 : (datetime)((long)t0 - rem + 60);
          MqlRates rates[];
-         int n = CopyRates(SLG_evSym[e], PERIOD_M1, SLG_evTime[e], tEnd, rates);
+         int n = CopyRates(SLG_evSym[e], PERIOD_M1, startM1, tEnd, rates);
          if(n <= 0)
             continue; // 1分足が取得できない場合は次回再試行
 
@@ -957,12 +978,12 @@ void SLG_EvaluatePending()
 
          double atr       = SLG_evAtr[e];
          double price     = SLG_evPrice[e];
-         double upAtr     = (maxHigh - price) / atr;
-         double downAtr   = (price - minLow) / atr;
+         double upAtr     = MathMax(0.0, (maxHigh - price) / atr);
+         double downAtr   = MathMax(0.0, (price - minLow) / atr);
          double closeAtr  = (lastClose - price) / atr;
          double maxExcAtr = MathMax(upAtr, downAtr);
 
-         string line = StringFormat("%s,%s,%s,%d,%I64d,%.6f,%.6f,%d,%.3f,%.3f,%.3f,%.3f,%s",
+         string line = StringFormat("%s,%s,%s,%d,%I64d,%.6f,%.6f,%d,%.3f,%.3f,%.3f,%.3f,%s,2",
                                     SLG_evId[e], SLG_evType[e], SLG_evSym[e], SLG_evTf[e],
                                     (long)SLG_evTime[e], price, atr, H,
                                     closeAtr, upAtr, downAtr, maxExcAtr, SLG_evFeat[e]);
@@ -970,6 +991,12 @@ void SLG_EvaluatePending()
            {
             SLG_AddDone(key);
             wrote = true;
+            evalCount++;
+            if(evalCount >= 300)
+              {
+               stop = true;
+               break;
+              }
            }
         }
      }
@@ -1061,7 +1088,7 @@ bool SLG_WriteReport()
    string L[];
    int cmp = 0, sigHigh = 0, sigLow = 0;
 
-   SLG_AddLine(L, "=== CCompression 検証レポート (集計方式 v2) ===");
+   SLG_AddLine(L, "=== CCompression 検証レポート (SignalLogger " + SLG_VERSION + ": " + SLG_VERSION_NOTE + ") ===");
    SLG_AddLine(L, "作成時刻(サーバー時間): " + TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES));
    SLG_AddLine(L, StringFormat("設定: 「動いた」=%.1fATR(評価%d本後の値。他の本数は√(本数比)で補正: 例 %s) / 評価本数=%s / 基準の抽出率 BASE=%.1f%% BASE_COMP=%.1f%% BASE_RISE=%.0f%% / 判定に必要な最小の実効件数=%d",
                                SLG_HitATR, SLG_HitRefBars,
@@ -1098,6 +1125,47 @@ bool SLG_WriteReport()
       cnts += StringFormat("%s=%d ", tNames[k], tCnt[k]);
    SLG_AddLine(L, cnts);
    SLG_AddLine(L, "※集計に入るのは、全ての評価本数が揃ったイベントだけ。");
+
+   //--- 日別の記録件数(サーバー日付)。特定の日にイベントが集中していないかを確認するため ---
+   string dyKeys[];
+   int    dyVals[];
+   int    dyCnt = 0;
+   int    days[];
+   for(int i = 0; i < nEv; i++)
+     {
+      int dnum = (int)((long)SLG_evTime[i] / 86400);
+      string dk = IntegerToString(dnum) + "|" + SLG_evType[i];
+      SLG_MapPut(dyKeys, dyVals, dyCnt, dk, SLG_MapGet(dyKeys, dyVals, dk, 0) + 1);
+      bool knownDay = false;
+      for(int k = 0; k < ArraySize(days); k++)
+         if(days[k] == dnum) { knownDay = true; break; }
+      if(!knownDay)
+        {
+         int md = ArraySize(days);
+         ArrayResize(days, md + 1);
+         days[md] = dnum;
+        }
+     }
+   for(int a = 0; a < ArraySize(days) - 1; a++)
+      for(int b = a + 1; b < ArraySize(days); b++)
+         if(days[b] < days[a]) { int tmpd = days[a]; days[a] = days[b]; days[b] = tmpd; }
+   SLG_AddLine(L, "日別の記録件数(サーバー日付):");
+   int maxDayTotal = 0;
+   for(int d = 0; d < ArraySize(days); d++)
+     {
+      string dl = "  " + TimeToString((datetime)((long)days[d] * 86400), TIME_DATE) + ":";
+      int dtot = 0;
+      for(int k = 0; k < ArraySize(tNames); k++)
+        {
+         int c = SLG_MapGet(dyKeys, dyVals, IntegerToString(days[d]) + "|" + tNames[k], 0);
+         if(c > 0) { dl += StringFormat(" %s=%d", tNames[k], c); dtot += c; }
+        }
+      dl += StringFormat("  (計%d)", dtot);
+      if(dtot > maxDayTotal) maxDayTotal = dtot;
+      SLG_AddLine(L, dl);
+     }
+   if(nEv > 0)
+      SLG_AddLine(L, StringFormat("  最も件数の多い日が全体の%.0f%%。特定の日に集中していると、その日の相場の性格に結果が左右される。", (double)maxDayTotal / nEv * 100.0));
    SLG_AddLine(L, "");
 
    //--- 登場する種類(基準を除く)と時間足の一覧 ---
@@ -1149,6 +1217,46 @@ bool SLG_WriteReport()
         }
    SLG_AddLine(L, "");
 
+   //--- [1b] 基準どうしの比較 ---
+   //--- 「圧縮している」「強い圧縮のあとでボラが上昇した」という『状態』そのものが、
+   //--- 動きやすさと関係しているかを見る。シグナル(TRANSITIONなど)の効果とは別の問い。
+   SLG_AddLine(L, "[1b] 基準どうしの比較(圧縮という『状態』そのものに効果があるかを見る。シグナルの効果とは別の問い)");
+   string pairA[3];
+   string pairB[3];
+   pairA[0] = "BASE_COMP";  pairB[0] = "BASE";
+   pairA[1] = "BASE_RISE";  pairB[1] = "BASE_COMP";
+   pairA[2] = "BASE_RISE";  pairB[2] = "BASE";
+   int nScope = 1 + ArraySize(tfs);
+   for(int sc = 0; sc < nScope; sc++)
+     {
+      int scopeTf = (sc == 0) ? 0 : tfs[sc - 1];
+      for(int pr = 0; pr < 3; pr++)
+         for(int hi = 0; hi < nH; hi++)
+           {
+            int ia = SLG_FindStat(pairA[pr], scopeTf, SLG_horizons[hi]);
+            int ib = SLG_FindStat(pairB[pr], scopeTf, SLG_horizons[hi]);
+            if(ia < 0 || ib < 0 || SLG_stN[ia] < 10 || SLG_stN[ib] < 10)
+               continue;
+            double effA = (double)MathMax(1, SLG_stEff[ia]);
+            double effB = (double)MathMax(1, SLG_stEff[ib]);
+            double kA = SLG_stHit[ia] * (effA / (double)SLG_stN[ia]);
+            double kB = SLG_stHit[ib] * (effB / (double)SLG_stN[ib]);
+            double dfp;
+            double pp = SLG_PValue(kA, effA, kB, effB, dfp);
+            string vd;
+            if(MathMin(effA, effB) < SLG_MinN)
+               vd = StringFormat("n不足(実効件数の少ない方%.0f<%d)", MathMin(effA, effB), SLG_MinN);
+            else
+               vd = (pp < 0.05) ? "差あり(偶然の可能性あり・要追試)" : "差は有意でない";
+            SLG_AddLine(L, StringFormat("  %-9s vs %-9s %-5s H=%-3d  %.1f%%(実効%.0f) vs %.1f%%(実効%.0f) → 差%+.1fpt p=%.3f  %s",
+                                        pairA[pr], pairB[pr], SLG_TfText(scopeTf), SLG_horizons[hi],
+                                        (double)SLG_stHit[ia] / SLG_stN[ia] * 100.0, effA,
+                                        (double)SLG_stHit[ib] / SLG_stN[ib] * 100.0, effB,
+                                        dfp * 100.0, pp, vd));
+           }
+     }
+   SLG_AddLine(L, "");
+
    //--- [2] シグナル(全時間足) ---
    SLG_AddLine(L, "[2] シグナルの成績(全時間足まとめ)と、基準との比較");
    for(int ty = 0; ty < ArraySize(sigTypes); ty++)
@@ -1188,7 +1296,10 @@ bool SLG_WriteReport()
    SLG_AddLine(L, "  ・「動いた」は、評価期間内の最大変動(上でも下でも)が基準以上。基準は評価本数ごとに √(本数) で補正している。固定の2ATR・3ATRの割合も併記。");
    SLG_AddLine(L, "  ・信頼区間とp値は、実効件数で計算している。実効件数は、評価期間(評価本数×時間足)の時間窓で数える:");
    SLG_AddLine(L, "    最初のイベントから評価期間の長さの窓を作り、窓に入るイベントは、通貨ペアが違っても1つの塊と数える(評価期間が重なると結果が独立でないため)。");
+   SLG_AddLine(L, "    「全時間足」の行の実効件数は、時間足ごとの塊の数の合計(別の時間足のイベントは別の塊と数える。同じ値動きを複数の時間足で数える分だけ、やや甘い)。");
    SLG_AddLine(L, "    保守的な数え方なので、実効件数は件数よりかなり少なくなる。それでも、時間帯をまたぐ相関(円・ドルの動きなど)は残る。");
+   SLG_AddLine(L, "  ・比較の相手(基準)は、実効件数が足りなくても、優先順位の最も高いものに固定している(評価本数の間で相手が入れ替わらないように)。");
+   SLG_AddLine(L, "  ・急変(SPIKE系)は、検知した分の次の分の足から評価している(検知前の値動きを、検知後の動きとして数えないため)。");
    SLG_AddLine(L, StringFormat("  ・急変(SPIKE系)は、同じ銘柄・時間足で%d本以内に続けて記録されたものを、1つの急変と数えている(集計から除いた件数: %d件)。", SLG_EpisodeBars, SLG_dpCnt));
    SLG_AddLine(L, "  ・TRANSITIONは BASE_RISE(強い圧縮の後でボラが上昇し、Scoreは下がっていない足)と比べる。TRANSITIONの条件に「ボラ上昇」が含まれるため、");
    SLG_AddLine(L, "    ボラが戻り始めたから動く、という当たり前の性質を除いて、Scoreが下がることの効果を見るため。");
