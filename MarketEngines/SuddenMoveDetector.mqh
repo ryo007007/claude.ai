@@ -423,8 +423,10 @@ double SMD_MedianSorted(const double &sorted[], const int n)
 //| V2の急変判定。atrHandleは呼び出し側で作成済みのiATRハンドル        |
 //| 戻り値: true=計算成功 / false=データ不足等で判定不能               |
 //+------------------------------------------------------------------+
-bool SMD_CheckSpikeV2(const string symbol, const ENUM_TIMEFRAMES tf, const int atrHandle,
-                      SMD_SpikeInfo &info)
+//--- shift: 判定する足の位置(0=形成中の足 / 1=直前の確定足 / ...)。過去の足を再生して確かめる時に使う。
+//---        shift>0 の足は、その足の最終的な高値・安値・終値で判定する。
+bool SMD_CheckSpikeV2At(const string symbol, const ENUM_TIMEFRAMES tf, const int atrHandle,
+                        const int shift, SMD_SpikeInfo &info)
   {
    info.isSpike    = false;
    info.v1Spike    = false;
@@ -440,20 +442,20 @@ bool SMD_CheckSpikeV2(const string symbol, const ENUM_TIMEFRAMES tf, const int a
    if(atrHandle == INVALID_HANDLE)
       return false;
 
-   //--- 基準ATR(直近の確定足) ---
+   //--- 基準ATR(判定する足の1本前の確定足) ---
    double atrBuf[];
    ArraySetAsSeries(atrBuf, true);
-   if(CopyBuffer(atrHandle, 0, 1, 1, atrBuf) <= 0)
+   if(CopyBuffer(atrHandle, 0, shift + 1, 1, atrBuf) <= 0)
       return false;
    double atrAvg = atrBuf[0];
    if(atrAvg <= 0.0)
       return false;
    info.atrAvg = atrAvg;
 
-   //--- 形成中の足のレンジ(V1)と、ギャップ込みのTR(V2) ---
-   double hi0 = iHigh(symbol, tf, 0);
-   double lo0 = iLow(symbol, tf, 0);
-   double pc  = iClose(symbol, tf, 1);
+   //--- 判定する足のレンジ(V1)と、ギャップ込みのTR(V2) ---
+   double hi0 = iHigh(symbol, tf, shift);
+   double lo0 = iLow(symbol, tf, shift);
+   double pc  = iClose(symbol, tf, shift + 1);
    if(hi0 == 0.0 || lo0 == 0.0 || pc == 0.0)
       return false;
 
@@ -466,7 +468,7 @@ bool SMD_CheckSpikeV2(const string symbol, const ENUM_TIMEFRAMES tf, const int a
    int needed = SMD_ROC_ZLookback + SMD_ROC_Period + 2;
    double closeBuf[];
    ArraySetAsSeries(closeBuf, true);
-   if(CopyClose(symbol, tf, 0, needed, closeBuf) < needed)
+   if(CopyClose(symbol, tf, shift, needed, closeBuf) < needed)
       return false;
 
    int n = SMD_ROC_ZLookback;
@@ -516,7 +518,8 @@ bool SMD_CheckSpikeV2(const string symbol, const ENUM_TIMEFRAMES tf, const int a
    if(SMD_RolloverExcludeMin > 0)
      {
       MqlDateTime dt;
-      TimeToStruct(TimeTradeServer(), dt);
+      // 形成中の足(shift=0)は現在のサーバー時間、過去の足はその足の時刻で判定する
+      TimeToStruct((shift == 0) ? TimeTradeServer() : iTime(symbol, tf, shift), dt);
       if(dt.hour * 60 + dt.min < SMD_RolloverExcludeMin)
          info.rollover = true;
      }
@@ -528,5 +531,12 @@ bool SMD_CheckSpikeV2(const string symbol, const ENUM_TIMEFRAMES tf, const int a
                    && MathAbs(info.robustZ) >= SMD_RobustZThreshold
                    && info.efficiency >= SMD_MinEfficiency);
    return true;
+  }
+
+//--- 形成中の足(shift=0)を判定する(従来どおり。スキャナーなどから使う)
+bool SMD_CheckSpikeV2(const string symbol, const ENUM_TIMEFRAMES tf, const int atrHandle,
+                      SMD_SpikeInfo &info)
+  {
+   return SMD_CheckSpikeV2At(symbol, tf, atrHandle, 0, info);
   }
 //+------------------------------------------------------------------+
