@@ -1756,7 +1756,19 @@ if(g_currentSymbolIndex >= 0)
       }
    }
 
+   //--- パネル描画の負荷軽減判定（1秒に1回だけ true になる）
+   bool shouldDraw = false;
    if(UsePanel)
+   {
+      datetime currentTime = TimeCurrent();
+      if(currentTime - g_lastPanelUpdate >= 1)
+      {
+         shouldDraw = true;
+         g_lastPanelUpdate = currentTime; // ここで時間を更新
+      }
+   }
+
+  if(UsePanel && shouldDraw)
    {
       int totalSignals = 0;
       int totalSignalsNoW = 0;
@@ -1899,7 +1911,7 @@ if(g_currentSymbolIndex >= 0)
          }
       }
 
-      if(UsePanel)
+     if(UsePanel && shouldDraw)
       {
          int yPos = GetPanelY(i + 1);
          CreateWeeklyFilterButton(i, yPos);
@@ -1942,12 +1954,13 @@ if(g_currentSymbolIndex >= 0)
       }
    }
 
-   if(UsePanel)
-      DrawCurrencyRankingPanel();
-
+   if(UsePanel && shouldDraw)
+   {
+       DrawCurrencyRankingPanel();
+   }
    return(rates_total);
-}
-
+ }
+ 
 //+------------------------------------------------------------------+
 //| チャートイベント                                                 |
 //+------------------------------------------------------------------+
