@@ -1277,25 +1277,17 @@ void DrawSubLabel(string name, int y, int xDistance, string text, color clr)
       ObjectSetInteger(0, name, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
 }
 
-// 通貨ペア名の部分だけ、各通貨の強弱に応じて色分けする。
-// 主要7通貨のペア以外（GOLD, BTCUSDなど）は通常通り単一色のまま。
-void DrawSymbolWithCurrencyColors(int rowIdx, int y, string sym, string restText, color restColor)
+// パネルの1行を描画する（通貨ペア名と残りのテキストを単一のラベルとして結合）
+void DrawPanelRow(int rowIdx, int y, string sym, string restText, color rowColor)
 {
-   // 通貨コードの色分けは廃止（白色に統一）したため、以前のように行を複数の
-   // ラベルに分割して個別に色を付ける必要はない。TextGetSizeによる幅測定が
-   // 環境によってはうまく機能せず行が表示されなくなる不具合があったため、
-   // シンプルな単一ラベル表示に戻す。
+   // 通貨ペア名を左寄せで7文字分確保し、残りのテキストと結合する
    string fullText = StringFormat("%-7s", sym) + restText;
-
-   string sym1Name = "MTF_Panel_Cur1_" + IntegerToString(rowIdx);
-   string sym2Name = "MTF_Panel_Cur2_" + IntegerToString(rowIdx);
-   string restName = "MTF_Panel_Row_"  + IntegerToString(rowIdx);
-
-   // 過去のバージョンで作られた分割ラベルが残っていれば削除しておく
-   ObjectDelete(0, sym1Name);
-   ObjectDelete(0, sym2Name);
-
-   DrawPanelLabel(restName, y, fullText, restColor);
+   
+   // 行ごとの一意なオブジェクト名を生成
+   string objName = "MTF_Panel_Row_" + IntegerToString(rowIdx);
+   
+   // ラベルを描画（または更新）
+   DrawPanelLabel(objName, y, fullText, rowColor);
 }
 
 // 右下の空きスペースに、主要通貨の強弱ランキングを横並び1行で表示する
@@ -1611,6 +1603,9 @@ void FillHeikinAshi(const int rates_total,
          // 直前バーの平均足（すでにバッファに入っている値を使う）
          double prevHaOpen  = HAOpenBuffer[i - 1];
          double prevHaClose = HACloseBuffer[i - 1];
+         
+         // 直前のHA値が未計算（EMPTY_VALUE）の場合のフォールバック処理
+         // これにより、データが途切れている場合でも計算を継続できます。
          if(prevHaOpen == EMPTY_VALUE || prevHaClose == EMPTY_VALUE)
            {
             prevHaOpen  = (open[i - 1] + close[i - 1]) * 0.5;
@@ -1936,7 +1931,7 @@ if(g_currentSymbolIndex >= 0)
             bbFlag, sqFlag, hlFlag, smdFlag, TrendArrow(tWeekly), TrendArrow(tUp), TrendArrow(tMid), TrendArrow(tLow),
             tag, g_signalCount[i], g_signalCountNoWeekly[i]);
 
-         DrawSymbolWithCurrencyColors(i, yPos, sym, restText, rowColor);
+         DrawPanelRow(i, yPos, sym, restText, rowColor);
       }
 
       // --- 矢印の描画は「今見ているチャートの通貨ペア」のみ ---
