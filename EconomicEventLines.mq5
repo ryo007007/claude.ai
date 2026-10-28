@@ -225,14 +225,16 @@ void DrawLines()
      }
 
    //--- 今回の対象外になった古い線・ラベルを削除 ---
-   for(int i = ObjectsTotal(0, 0, -1) - 1; i >= 0; i--)
+   for(int i = ObjectsTotal(0) - 1; i >= 0; i--)
      {
-      string name = ObjectName(0, i, 0, -1);
+      string name = ObjectName(0, i);
       if(StringFind(name, "EVL_L_") != 0 && StringFind(name, "EVL_T_") != 0)
          continue;
+         
       bool keep = false;
       for(int j = 0; j < ArraySize(cur); j++)
          if(cur[j] == name) { keep = true; break; }
+         
       if(!keep)
          ObjectDelete(0, name);
      }
