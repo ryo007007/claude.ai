@@ -260,6 +260,8 @@ bool g_hideAllPanel = false; // 通貨ペアパネルの一括非表示フラグ
 datetime g_lastDPSqueezeAlertTime[]; // 通貨ペアごとのスクイーズアラート重複防止（配列化）
 datetime g_lastWPSqueezeAlertTime[];
 
+datetime g_lastPanelUpdate = 0; // パネル描画の負荷軽減用（最終更新時刻）
+
 //---------------- 通貨強弱インジケーター用変数 ----------------
 #define MAJOR_COUNT 7
 string g_majors[MAJOR_COUNT] = {"USD","EUR","JPY","GBP","CHF","AUD","CAD"};
