@@ -1085,9 +1085,10 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
   {
+   // 1. クリックイベントでなければ即終了
    if(id != CHARTEVENT_OBJECT_CLICK) return;
 
-   //--- 画面上のON/OFFボタン ---
+   // 2. 画面上のON/OFFボタンの処理
    if(sparam == "CCOMP_Scan_BtnLog")
      {
       g_logOn = !g_logOn;
@@ -1105,7 +1106,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       ChartRedraw(0);
       return;
      }
-
    if(sparam == "CCOMP_Scan_BtnReport")
      {
       bool ok = SLG_WriteReport();
@@ -1116,31 +1116,37 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       return;
      }
 
-   string prefix = "CCOMP_Scan_Row_";
-      //--- パネルの行クリック
+   // 3. 髭検知パネルの行クリック処理
    string wickPrefix = "CCOMP_Wick_Row_";
    if(StringFind(sparam, wickPrefix) == 0)
      {
       string idxStr = StringSubstr(sparam, StringLen(wickPrefix));
       int r = (int)StringToInteger(idxStr);
+      
       if(r >= 0 && r < g_wickHistoryCount)
         {
          string sym = g_wickHistory[r].symbol;
          ENUM_TIMEFRAMES tf = g_wickHistory[r].tf;
+         
          if(OpenInNewChart)
             ChartOpen(sym, tf);
          else
             ChartSetSymbolPeriod(0, sym, tf);
         }
-      return;
+      return; // 処理したので終了
      }
-   if(StringFind(sparam, prefix) != 0) return;
+
+   // 4. 圧縮スキャナーパネルの行クリック処理
+   string prefix = "CCOMP_Scan_Row_";
+   if(StringFind(sparam, prefix) != 0) return; // ← ここがポイント：対象外なら即終了
+   
    string idxStr = StringSubstr(sparam, StringLen(prefix));
    int r = (int)StringToInteger(idxStr);
-   if(r < 0 || r >= g_rowCount) return;
+   
+   if(r < 0 || r >= g_rowCount) return; // 範囲外なら終了
 
-   string sym          = g_rowSymbol[r];
-   ENUM_TIMEFRAMES tf   = g_rowTF[r];
+   string sym = g_rowSymbol[r];
+   ENUM_TIMEFRAMES tf = g_rowTF[r];
 
    if(OpenInNewChart)
      {
@@ -1153,7 +1159,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       if(!ok) Print("通貨ペア/時間足の切り替えに失敗しました: ", sym, " ", EnumToString(tf));
      }
   }
-//+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
 //| 解説パネル                                                         |
@@ -1634,8 +1639,6 @@ void DrawWickPanel()
          ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
          ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
          ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
-         ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);
-         ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
          ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
          ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
         }
