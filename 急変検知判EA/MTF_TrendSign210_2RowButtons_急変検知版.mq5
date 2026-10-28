@@ -279,7 +279,7 @@ int      g_pentaClickStep = 0;
 datetime g_p1_time = 0, g_p2_time = 0;
 double   g_p1_price = 0.0, g_p2_price = 0.0;
 int      g_pentagonCounter = 0;    
-uint     g_lastBtnClickTick = 0;   
+ulong     g_lastBtnClickTick = 0;   
 
 #define BTN_BB       "MTF_Btn_BB"
 #define BTN_HA       "MTF_Btn_HA"
@@ -1985,7 +1985,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
    if(g_showPentagon && id == CHARTEVENT_CLICK)
    {
-      if(GetTickCount() - g_lastBtnClickTick < 200) return;
+      if(GetTickCount64() - g_lastBtnClickTick < 200) return;
 
       datetime clickTime; double clickPrice; int subwin = 0;
       if(ChartXYToTimePrice(0, (int)lparam, (int)dparam, subwin, clickTime, clickPrice))
@@ -2026,7 +2026,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       if(sparam == BTN_HIDE)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_hideAllPanel = !g_hideAllPanel;
          SetRightUIElementsVisible(!g_hideAllPanel);
          
@@ -2039,7 +2039,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       if(sparam == BTN_PENTAGON)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showPentagon = !g_showPentagon;
          
          if(g_showPentagon)
@@ -2061,7 +2061,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       if(StringFind(sparam, BTN_W_FILTER_PREFIX) == 0)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          string idxStr = StringSubstr(sparam, StringLen(BTN_W_FILTER_PREFIX));
          int idx = (int)StringToInteger(idxStr);
          if(idx >= 0 && idx < g_symbolCount)
@@ -2082,7 +2082,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       if(sparam == BTN_BB)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showBB = !g_showBB;
          UpdateMAButtonLook(BTN_BB, "BB", g_showBB, clrCyan);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
@@ -2090,7 +2090,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_HA)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showHA = !g_showHA;
          UpdateMAButtonLook(BTN_HA, "HA", g_showHA, clrMediumSpringGreen);
          ApplyHAVisibility();
@@ -2099,7 +2099,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_RSI)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showRSI = !g_showRSI;
          UpdateMAButtonLook(BTN_RSI, "RSI", g_showRSI, clrMediumOrchid);
          AttachRSITrendlines(g_showRSI);
@@ -2108,7 +2108,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_WP)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showWP = !g_showWP;
          UpdateMAButtonLook(BTN_WP, "WP", g_showWP, clrGold);
          DrawPivotLines();
@@ -2117,7 +2117,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_DP)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showDP = !g_showDP;
          UpdateMAButtonLook(BTN_DP, "DP", g_showDP, clrOrange);
          DrawPivotLines();
@@ -2126,7 +2126,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_WEEKLY)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showWeekly = !g_showWeekly;
          UpdateMAButtonLook(BTN_WEEKLY, "週", g_showWeekly, clrYellow);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
@@ -2134,7 +2134,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_UPPER)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showUpper = !g_showUpper;
          UpdateMAButtonLook(BTN_UPPER, "上", g_showUpper, clrOrangeRed);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
@@ -2142,7 +2142,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_MIDDLE)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showMiddle = !g_showMiddle;
          UpdateMAButtonLook(BTN_MIDDLE, "中", g_showMiddle, clrLime);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
@@ -2150,7 +2150,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       if(sparam == BTN_LOWER)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          g_showLower = !g_showLower;
          UpdateMAButtonLook(BTN_LOWER, "下", g_showLower, clrDeepSkyBlue);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
@@ -2159,7 +2159,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       if(sparam == "MTF_Rank_BestPair")
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          if(g_bestPairSymbol != "")
          {
             if(OpenInNewChart)
@@ -2181,7 +2181,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       string prefix = "MTF_Panel_Row_";
       if(StringFind(sparam, prefix) == 0)
       {
-         g_lastBtnClickTick = GetTickCount();
+         g_lastBtnClickTick = GetTickCount64();
          string idxStr = StringSubstr(sparam, StringLen(prefix));
          int idx = (int)StringToInteger(idxStr);
          if(idx >= 0 && idx < g_symbolCount)
