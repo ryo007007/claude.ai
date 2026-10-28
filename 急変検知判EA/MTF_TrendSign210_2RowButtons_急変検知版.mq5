@@ -1574,12 +1574,28 @@ void FillHeikinAshi(const int rates_total,
                     const double &close[],
                     const int prev_calculated)
 {
-   if(rates_total <= 0)
+   // 1. データ不足時の早期リターン
+   // 平均足計算には少なくとも2本以上のデータが必要です。
+   // 週末明けなどでヒストリーデータの取得が完了していないタイミングでの誤計算を防ぎます。
+   if(rates_total < 2)
       return;
 
+   // 2. 計算開始位置（start）の最適化
    int start = 0;
-   if(prev_calculated > 1)
-      start = prev_calculated - 1;
+   if(prev_calculated > 2)
+     {
+      // 前の足を再計算（prev_calculated - 2）することで、
+      // HA値の連続性と正確性を確保します。
+      start = prev_calculated - 2;
+     }
+   else if(prev_calculated > 0)
+     {
+      // 初期計算時（prev_calculated が 1 または 2）は、0 から計算し直します。
+      start = 0;
+     }
+
+   // 3. 配列外参照を防ぐための安全チェック
+   if(start < 0) start = 0;
 
    for(int i = start; i < rates_total; i++)
      {
