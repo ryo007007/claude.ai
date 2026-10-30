@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        SuddenMoveDetector.mqh     |
+//|                                        SuddenMoveDetectorOriginal.mqh     |
 //|  急変検知モジュール - MTF_TrendSignダッシュボードへの組込み用       |
 //|                                                                    |
 //|  ATRスパイク + ROC(Zスコア) + 複数JPYクロス同時性チェックにより、  |

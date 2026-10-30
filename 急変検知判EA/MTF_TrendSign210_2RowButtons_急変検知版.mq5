@@ -79,7 +79,7 @@
 #property indicator_label14 "Heikin Ashi"
 
 //---------------- 急変検知モジュール ----------------
-#include "SuddenMoveDetector.mqh"
+#include "SuddenMoveDetectorOriginal.mqh"
 
 //---------------- 入力パラメータ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,XAUUSD,BTCUSD"; 
