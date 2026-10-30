@@ -82,6 +82,15 @@ input int    WickMaxHistory   = 30;      // 髭検知履歴の最大保持件数
 input int    WickLookbackBars = 100;     // 再起動時に遡る足数
 input bool   WickAlertOn      = true;    // 髭検知時にアラートを出す
 
+input group "=== 髭検知 強調表示 ==="
+input bool   WickHighlightEnable = true;      // 髭検知足をチャート上で強調表示する
+input color  WickHighlightColor  = clrYellow; // 強調表示の色
+input int    WickHighlightWidth  = 2;         // 強調表示の枠線太さ
+
+input group "=== 髭検知 強調クリアボタン位置 ==="
+input int    WickBtnX = 100;  // ボタンX（右下隅からの距離。大きいほど左）
+input int    WickBtnY = 10;   // ボタンY（右下隅からの距離。大きいほど上）
+
 //---------------- グローバル ----------------
 string          g_symbols[];
 int             g_symbolCount = 0;
@@ -140,12 +149,15 @@ struct WICK_HistoryItem
 WICK_HistoryItem  g_wickHistory[];
 int               g_wickHistoryCount = 0;
 
+bool            g_wickHL_On = true;   // 髭強調表示のON/OFF（ボタンでトグル）
+
 // 基準(対照)を最後に判定した確定足の時刻(g_scanと同じ添字)
 datetime        g_baseBar[];
 
 void DrawDetailPanel();   // 解説パネル描画(定義はファイル末尾)
 void DrawStatsPanel();    // 検証パネル描画(定義はファイル末尾)
-void DrawWickPanel();   // 髭検知パネル描画
+void DrawWickPanel();     // 髭検知パネル描画
+void DrawWickHighlights();// 髭検知足の強調表示描画
 void DrawWolfeChart();    // ウォルフ波動のチャート描画(定義はファイル末尾)
 
 //+------------------------------------------------------------------+
@@ -180,7 +192,6 @@ color CCOMP_StateColor(const CCOMP_STATE st)
      }
   }
 
-//+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
 //| 急変状態の保存・復元                                               |
 //| 行クリックでチャートの通貨/時間足が変わるとインジケーターが         |
@@ -236,9 +247,6 @@ void SaveSuppressed(const int i, const bool on)
   }
 
 //--- 同じ行・同じ種類のイベントを、続けて記録しない(連続する急変を1つの急変として数える)
-//--- 検知が続いている間は、期限を延ばし続ける。検知が SpikeHoldBars 本の間途切れた時に初めて、次の急変として記録する。
-//--- (期限を延ばさないと、長く続く急変を SpikeHoldBars 本ごとに何度も記録してしまう)
-//--- 端末のグローバル変数に期限を保存するので、チャートの切替で読み込み直されても重複しない
 bool EpisodeFire(const int i, const string field, const datetime now)
   {
    string key = GVKey(i, field);
@@ -265,7 +273,6 @@ void LoadSpikeStates()
            }
          else
            {
-            // 期限切れは削除
             GlobalVariableDel(ku);
             GlobalVariableDel(GVKey(i, "SD"));
             GlobalVariableDel(GVKey(i, "SR"));
@@ -295,7 +302,6 @@ int OnInit()
    ArrayResize(g_tfList, c);
    for(int i = 0; i < c; i++) g_tfList[i] = tmp[i];
    
-   //--- 検知用時間足リストの作成（圧縮監視とは独立。M1はWickScanM1に従う）
    ArrayResize(g_wickTfList, 7);
    int wc = 0;
    if(ScanD1)  g_wickTfList[wc++] = PERIOD_D1;
@@ -304,7 +310,7 @@ int OnInit()
    if(ScanM30) g_wickTfList[wc++] = PERIOD_M30;
    if(ScanM15) g_wickTfList[wc++] = PERIOD_M15;
    if(ScanM5)  g_wickTfList[wc++] = PERIOD_M5;
-   if(WickScanM1) g_wickTfList[wc++] = PERIOD_M1; // 圧縮監視とは独立
+   if(WickScanM1) g_wickTfList[wc++] = PERIOD_M1;
    g_wickTfCount = wc;
    ArrayResize(g_wickTfList, wc);
    ArrayResize(g_wickHistory, WickMaxHistory);
@@ -359,27 +365,22 @@ int OnInit()
             PrintFormat("初期化失敗: %s %s", g_symbols[si], EnumToString(g_tfList[ti]));
         }
 
-   REL_Init(g_symbols, g_symbolCount, g_tfList, g_tfCount);   // 関連通貨エンジン
+   REL_Init(g_symbols, g_symbolCount, g_tfList, g_tfCount);
 
-   SLG_Init();          // 結果記録の初期化(過去のログを読み込む)
-   // 画面のON/OFF状態を復元(なければ入力パラメータの値)
+   SLG_Init();
    g_logOn   = GlobalVariableCheck("CCOMP_UI_LOG")   ? (GlobalVariableGet("CCOMP_UI_LOG")   > 0.5) : SLG_Enable;
    g_statsOn = GlobalVariableCheck("CCOMP_UI_STATS") ? (GlobalVariableGet("CCOMP_UI_STATS") > 0.5) : ShowStatsPanel;
+   g_wickHL_On = GlobalVariableCheck("CCOMP_UI_WICKHL") ? (GlobalVariableGet("CCOMP_UI_WICKHL") > 0.5) : true;
    SLG_SetOn(g_logOn);
-   LoadSpikeStates();   // チャート切替で読み込み直された場合に急変状態を引き継ぐ
+   LoadSpikeStates();
    
-   // =========================================================================
-   // 【追加】再起動時に過去の髭を検知してパネルに表示する処理
-   // =========================================================================
    if(UseWickDetector && WickLookbackBars > 0)
      {
-      // 一時配列を用意（古い順に格納する）
       int tempCount = 0;
       int maxTemp = WickLookbackBars * g_symbolCount * g_wickTfCount;
       WICK_HistoryItem tempHistory[];
       ArrayResize(tempHistory, maxTemp);
 
-      // 古い足（WickLookbackBars本前）から新しい足（2本前）に向かってループ
       for(int shift = WickLookbackBars; shift >= 2; shift--)
         {
          for(int si = 0; si < g_symbolCount; si++)
@@ -390,7 +391,6 @@ int OnInit()
                ENUM_TIMEFRAMES tf = g_wickTfList[ti];
                
                WICK_Info wick;
-               // shift本前の足をチェック
                if(!WICK_Check(sym, tf, shift, WickRangeMult, WickMinRatio, wick)) continue;
                
                datetime barTime = iTime(sym, tf, shift);
@@ -406,11 +406,9 @@ int OnInit()
            }
         }
 
-      // 一時配列（古い順）を、g_wickHistory（最新が先頭）に変換して格納
       g_wickHistoryCount = 0;
       ArrayResize(g_wickHistory, WickMaxHistory);
       
-      // 配列の末尾（最新）から先頭に向かって g_wickHistory に詰める
       for(int i = tempCount - 1; i >= 0 && g_wickHistoryCount < WickMaxHistory; i--)
         {
          g_wickHistory[g_wickHistoryCount] = tempHistory[i];
@@ -430,13 +428,12 @@ void OnDeinit(const int reason)
       CCOMP_ReleaseInstance(g_scan[i]);
    ObjectsDeleteAll(0, "CCOMP_Scan_");
    ObjectsDeleteAll(0, "CCOMP_Wick_");
-   g_wlfDrawKey = "x";      // 描画キーを無効化してから削除する
+   ObjectsDeleteAll(0, "CCOMP_WickHL_");
+   g_wlfDrawKey = "x";
    WLF_ClearDrawing();
    ChartRedraw(0);
   }
 
-//+------------------------------------------------------------------+
-//| 表示対象とすべき状態かどうかを入力設定に従って判定                 |
 //+------------------------------------------------------------------+
 bool ShouldDisplay(const CCOMP_STATE st)
   {
@@ -444,11 +441,9 @@ bool ShouldDisplay(const CCOMP_STATE st)
    if(st == CCOMP_TRANSITION) return ShowTransition;
    if(ShowOnlyStrongOrAbove)
       return (st == CCOMP_STRONG_COMPRESSION || st == CCOMP_TIGHT_COMPRESSION);
-   return ShowCompression; // COMPRESSION / STRONG / TIGHT すべて含む
+   return ShowCompression;
   }
 
-//+------------------------------------------------------------------+
-//| 行の表示用ラベルを作成/更新                                        |
 //+------------------------------------------------------------------+
 void DrawRow(const int r, const string text, const color clr)
   {
@@ -470,8 +465,6 @@ void DrawRow(const int r, const string text, const color clr)
   }
 
 //+------------------------------------------------------------------+
-//| 全インスタンス更新 → フィルタ・ソート → 描画                      |
-//+------------------------------------------------------------------+
 void UpdateAndDraw()
   {
    datetime nowT = TimeCurrent();
@@ -479,11 +472,9 @@ void UpdateAndDraw()
    for(int i = 0; i < g_scanTotal; i++)
       CCOMP_UpdateInstance(g_scan[i]);
 
-   //--- 指標カレンダー・相関係数の更新(内部で間隔を空けて実行される) ---
    EVT_Refresh();
    REL_Update();
 
-   //--- TDシーケンシャル(確定足が更新された行だけ計算する) ---
    if(TDS_Enable)
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -494,7 +485,6 @@ void UpdateAndDraw()
         }
      }
 
-   //--- 一目均衡表(確定足が更新された行だけ計算する) ---
    if(ICH_Enable)
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -505,7 +495,6 @@ void UpdateAndDraw()
         }
      }
 
-   //--- ウォルフ波動(確定足が更新された行だけ計算する) ---
    if(WLF_Enable)
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -515,7 +504,6 @@ void UpdateAndDraw()
             g_wlfBar[i] = g_scan[i].lastBarTime;
         }
 
-      //--- ポイント5が確定した行の、検証ログと通知 ---
       for(int i = 0; i < g_scanTotal; i++)
         {
          if(!WLF_IsConfirmed(g_wlf[i])) continue;
@@ -563,7 +551,6 @@ void UpdateAndDraw()
         }
      }
 
-   //--- 予兆スコア計算用の配列を作る ---
    {
       int totalImm = g_symbolCount * g_tfCount;
       ArrayResize(g_immScore, totalImm);
@@ -580,7 +567,6 @@ void UpdateAndDraw()
            }
    }
 
-   //--- 基準(対照)の記録 ---
    if(SLG_IsOn())
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -620,7 +606,6 @@ void UpdateAndDraw()
         }
      }
 
-   //--- TRANSITION(圧縮解除)の検証ログとアラート ---
    for(int i = 0; i < g_scanTotal; i++)
      {
       if(!g_scan[i].ready || g_scan[i].state != CCOMP_TRANSITION) continue;
@@ -678,7 +663,6 @@ void UpdateAndDraw()
         }
      }
 
-   //--- 急変検知(圧縮中の行が対象。SpikeShowAlways=trueなら全行) ---
    if(UseSpikeOverride)
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -774,9 +758,6 @@ void UpdateAndDraw()
         }
      }
 
-   // =========================================================================
-   // 【WICK検知】 ※ g_scanTotal のループとは独立して実行
-   // =========================================================================
    if(UseWickDetector)
      {
       for(int si = 0; si < g_symbolCount; si++)
@@ -840,9 +821,6 @@ void UpdateAndDraw()
         }
      }
 
-   // =========================================================================
-   // 【フィルタして対象indexと優先度キーを収集】
-   // =========================================================================
    int    candIdx[];
    double candKey[];
    int    candKind[];
@@ -898,7 +876,6 @@ void UpdateAndDraw()
       n++;
      }
 
-   //--- 優先度キー降順にソート ---
    for(int a = 0; a < n - 1; a++)
      {
       int best = a;
@@ -926,7 +903,6 @@ void UpdateAndDraw()
 
    int shown = MathMin(n, MaxRows);
 
-   //--- タイトル行 ---
    string title = StringFormat("CCompression Scanner  (圧縮%d件 急変%d件 ウォルフ%d件 / 全%d組)", n - nSpike - nWolfe, nSpike, nWolfe, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
@@ -946,7 +922,6 @@ void UpdateAndDraw()
       ObjectSetInteger(0, tname, OBJPROP_COLOR, clrWhite);
    }
    
-   //--- 既存行を一旦全削除してから再構築 ---
    ObjectsDeleteAll(0, "CCOMP_Scan_Row_");
    ArrayResize(g_rowSymbol, shown);
    ArrayResize(g_rowTF, shown);
@@ -1058,6 +1033,7 @@ void UpdateAndDraw()
    DrawWolfeChart();
    DrawStatsPanel();
    DrawWickPanel();
+   DrawWickHighlights();
 
    SAL_Flush();
    SLG_EvaluatePending();
@@ -1065,6 +1041,7 @@ void UpdateAndDraw()
 
    ChartRedraw(0);
   }
+
 int OnCalculate(const int rates_total, const int prev_calculated,
                  const datetime &time[], const double &open[], const double &high[],
                  const double &low[], const double &close[],
@@ -1081,14 +1058,21 @@ void OnTimer()
   }
 
 //+------------------------------------------------------------------+
-//| 行クリックでその通貨ペア・時間足にチャートを切り替える             |
-//+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
   {
-   // 1. クリックイベントでなければ即終了
    if(id != CHARTEVENT_OBJECT_CLICK) return;
 
-   // 2. 画面上のON/OFFボタンの処理
+   if(sparam == "CCOMP_Wick_BtnClear")
+     {
+      g_wickHL_On = !g_wickHL_On;
+      GlobalVariableSet("CCOMP_UI_WICKHL", g_wickHL_On ? 1.0 : 0.0);
+      if(!g_wickHL_On)
+         ObjectsDeleteAll(0, "CCOMP_WickHL_");
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      ChartRedraw(0);
+      return;
+     }
+
    if(sparam == "CCOMP_Scan_BtnLog")
      {
       g_logOn = !g_logOn;
@@ -1116,7 +1100,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       return;
      }
 
-   // 3. 髭検知パネルの行クリック処理
    string wickPrefix = "CCOMP_Wick_Row_";
    if(StringFind(sparam, wickPrefix) == 0)
      {
@@ -1133,17 +1116,16 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          else
             ChartSetSymbolPeriod(0, sym, tf);
         }
-      return; // 処理したので終了
+      return;
      }
 
-   // 4. 圧縮スキャナーパネルの行クリック処理
    string prefix = "CCOMP_Scan_Row_";
-   if(StringFind(sparam, prefix) != 0) return; // ← ここがポイント：対象外なら即終了
+   if(StringFind(sparam, prefix) != 0) return;
    
    string idxStr = StringSubstr(sparam, StringLen(prefix));
    int r = (int)StringToInteger(idxStr);
    
-   if(r < 0 || r >= g_rowCount) return; // 範囲外なら終了
+   if(r < 0 || r >= g_rowCount) return;
 
    string sym = g_rowSymbol[r];
    ENUM_TIMEFRAMES tf = g_rowTF[r];
@@ -1160,10 +1142,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
      }
   }
 
-//+------------------------------------------------------------------+
-//| 解説パネル                                                         |
-//| チャートに表示中の(通貨ペア, 時間足)について、各指標の状態を       |
-//| 日本語で解説する。行クリックで切り替えた直後もこの内容が表示される  |
 //+------------------------------------------------------------------+
 string GetATRExplanation(const int score)
   {
@@ -1213,9 +1191,8 @@ string GetDeltaExplanation(const int delta)
    return("前回からScoreの変化はありません");
   }
 
-int g_detailLineCount = 0;   // 前回描画した解説行数(余った行を消すため)
+int g_detailLineCount = 0;
 
-//--- 解説1行を描画。j=上から何行目か、total=全行数
 void SetDetailLine(const int j, const int total, const string text, const color clr)
   {
    string name = "CCOMP_Scan_Detail_" + IntegerToString(j);
@@ -1320,7 +1297,6 @@ void DrawDetailPanel()
                               inst.isNR ? "はい" : "いいえ");
       clrs[L]  = base; L++;
 
-      // 予兆スコア・関連ペア・指標/開場
       REL_Result rrD;
       EVT_Info   evD;
       ComputeRowImminence(idx, rrD, evD);
@@ -1355,7 +1331,6 @@ void DrawDetailPanel()
          clrs[L]  = base; L++;
         }
 
-      // TDシーケンシャル
       if(TDS_Enable && g_td[idx].ready)
         {
          TDS_Result td = g_td[idx];
@@ -1385,7 +1360,6 @@ void DrawDetailPanel()
          clrs[L]  = clrGray; L++;
         }
 
-      // ウォルフ波動
       if(WLF_Enable && g_wlf[idx].ready)
         {
          WLF_Result w = g_wlf[idx];
@@ -1427,7 +1401,6 @@ void DrawDetailPanel()
            }
         }
 
-      // 一目均衡表
       if(ICH_Enable && g_ich[idx].ready)
         {
          ICH_Result ic = g_ich[idx];
@@ -1462,7 +1435,6 @@ void DrawDetailPanel()
            }
         }
 
-      // 急変との連携状況
       if(UseSpikeOverride && TimeCurrent() < g_spikeUntil[idx])
         {
          lines[L] = StringFormat("  急変検知中: %s  ATR比%.1f Z%+.1f  （一覧では圧縮表示を解除し急変として表示）",
@@ -1479,20 +1451,14 @@ void DrawDetailPanel()
    for(int j = 0; j < L; j++)
       SetDetailLine(j, L, lines[j], clrs[j]);
 
-   // 前回より行数が減った場合、余った行を消す
    for(int j = L; j < g_detailLineCount; j++)
       ObjectDelete(0, "CCOMP_Scan_Detail_" + IntegerToString(j));
    g_detailLineCount = L;
   }
-//+------------------------------------------------------------------+
 
-//+------------------------------------------------------------------+
-//| 検証パネル: 結果記録(SignalLogger)の集計を右上に表示              |
-//| 「TRANSITIONや急変のあと、実際にATRの何倍動いたか」を確認する     |
 //+------------------------------------------------------------------+
 int g_statLineCount = 0;
 
-//--- 右上のON/OFFボタンを1つ描画
 void DrawUiButton(const string name, const int x, const string text, const color bg)
   {
    if(ObjectFind(0, name) < 0)
@@ -1510,12 +1476,11 @@ void DrawUiButton(const string name, const int x, const string text, const color
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, StatsY);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
-   ObjectSetInteger(0, name, OBJPROP_STATE, false);   // 押しっぱなし表示にならないよう戻す
+   ObjectSetInteger(0, name, OBJPROP_STATE, false);
   }
 
 void DrawStatsPanel()
   {
-   //--- ボタン(検証パネルを隠していても常に表示する) ---
    DrawUiButton("CCOMP_Scan_BtnStats", StatsX,
                 g_statsOn ? "検証パネル: 表示" : "検証パネル: 非表示",
                 g_statsOn ? C'40,90,40' : C'70,70,70');
@@ -1563,7 +1528,7 @@ void DrawStatsPanel()
          ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
         }
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, StatsX);
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, StatsY + 28 + j * 15);   // ボタンの下から表示
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, StatsY + 28 + j * 15);
       ObjectSetString(0, name, OBJPROP_TEXT, text);
       ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
      }
@@ -1572,11 +1537,7 @@ void DrawStatsPanel()
       ObjectDelete(0, "CCOMP_Scan_Stat_" + IntegerToString(j));
    g_statLineCount = total;
   }
-//+------------------------------------------------------------------+
 
-//+------------------------------------------------------------------+
-//| ウォルフ波動のチャート描画                                         |
-//| 現在のチャートの通貨ペア・時間足に、パターンがあればラインを描く   |
 //+------------------------------------------------------------------+
 void DrawWolfeChart()
   {
@@ -1597,10 +1558,9 @@ void DrawWolfeChart()
      }
    WLF_DrawPattern(g_wlf[idx]);
   }
-//+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| 髭検知パネル                                                       |
+//| 髭検知パネル（右下に配置）                                         |
 //+------------------------------------------------------------------+
 int g_wickLineCount = 0;
 
@@ -1613,7 +1573,30 @@ void DrawWickPanel()
       return;
      }
 
-   //--- タイトル
+   //--- クリアボタン（入力パラメータ WickBtnX / WickBtnY を使用）
+   string btnClear = "CCOMP_Wick_BtnClear";
+   if(ObjectFind(0, btnClear) < 0)
+     {
+      ObjectCreate(0, btnClear, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, btnClear, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
+      ObjectSetInteger(0, btnClear, OBJPROP_XDISTANCE, WickBtnX);
+      ObjectSetInteger(0, btnClear, OBJPROP_YDISTANCE, WickBtnY);
+      ObjectSetInteger(0, btnClear, OBJPROP_XSIZE, 80);
+      ObjectSetInteger(0, btnClear, OBJPROP_YSIZE, 18);
+      ObjectSetInteger(0, btnClear, OBJPROP_FONTSIZE, 8);
+      ObjectSetString(0, btnClear, OBJPROP_FONT, "Consolas");
+      ObjectSetInteger(0, btnClear, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, btnClear, OBJPROP_HIDDEN, true);
+     }
+   // トグル状態に応じたテキストと色の切り替え
+   string btnText = g_wickHL_On ? "強調: ON" : "強調: OFF";
+   ObjectSetString(0, btnClear, OBJPROP_TEXT, btnText);
+   ObjectSetInteger(0, btnClear, OBJPROP_BGCOLOR, g_wickHL_On ? clrDarkSlateGray : clrDimGray);
+   ObjectSetInteger(0, btnClear, OBJPROP_COLOR, clrWhite);
+   ObjectSetInteger(0, btnClear, OBJPROP_BORDER_COLOR, clrGray);
+   ObjectSetInteger(0, btnClear, OBJPROP_STATE, false);
+
+   //--- タイトル（ボタンの左側に連動して配置）
    string titleName = "CCOMP_Wick_Title";
    if(ObjectFind(0, titleName) < 0)
      {
@@ -1624,12 +1607,12 @@ void DrawWickPanel()
       ObjectSetInteger(0, titleName, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
       ObjectSetInteger(0, titleName, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
      }
-   ObjectSetInteger(0, titleName, OBJPROP_XDISTANCE, 10);
-   ObjectSetInteger(0, titleName, OBJPROP_YDISTANCE, 10);
-   ObjectSetString(0, titleName, OBJPROP_TEXT, StringFormat("【髭検知】最新%d件 (×%.1f / ≥%.0f%%)", g_wickHistoryCount, WickRangeMult, WickMinRatio * 100));
+   ObjectSetInteger(0, titleName, OBJPROP_XDISTANCE, WickBtnX + 20); // ボタンのすぐ左に配置
+   ObjectSetInteger(0, titleName, OBJPROP_YDISTANCE, WickBtnY - 15);
+   ObjectSetString(0, titleName, OBJPROP_TEXT, StringFormat("最新%d件 (×%.1f / ≥%.0f%%)", g_wickHistoryCount, WickRangeMult, WickMinRatio * 100));
    ObjectSetInteger(0, titleName, OBJPROP_COLOR, clrYellow);
 
-   //--- 履歴行
+   //--- 履歴行（タイトルの左側・上側に配置）
    int shown = MathMin(g_wickHistoryCount, 20); // 最大20行
    for(int r = 0; r < shown; r++)
      {
@@ -1642,19 +1625,21 @@ void DrawWickPanel()
          ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
          ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
         }
-        
-      // ▼ 既存オブジェクトの場合でも、毎回プロパティを上書きしてクリック可能を保証する
+      
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);
       ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-      ObjectSetInteger(0, name, OBJPROP_ZORDER, 100); // クリック優先度を高くする
+      ObjectSetInteger(0, name, OBJPROP_ZORDER, 100); 
       
       WICK_HistoryItem item = g_wickHistory[r];
       string tfName = EnumToString(item.tf);
       StringReplace(tfName, "PERIOD_", "");
       
-      string text = StringFormat("%-9s %-4s %s髭 割合%.0f%% 倍率%.1f",
+      string timeStr = TimeToString(item.barTime, TIME_MINUTES);
+      
+      string text = StringFormat("%-9s %-4s %s髭 %s 割合%.0f%% 倍率%.1f",
                                  item.symbol, tfName,
                                  item.isUpper ? "上" : "下",
+                                 timeStr,
                                  item.wickRatio * 100, item.multiplier);
       
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
@@ -1667,4 +1652,43 @@ void DrawWickPanel()
    for(int r = shown; r < g_wickLineCount; r++)
       ObjectDelete(0, "CCOMP_Wick_Row_" + IntegerToString(r));
    g_wickLineCount = shown;
+}
+
+//+------------------------------------------------------------------+
+//| 髭検知足の強調表示（矩形で囲む）                                   |
+//+------------------------------------------------------------------+
+void DrawWickHighlights()
+{
+   if(!WickHighlightEnable || !g_wickHL_On)
+     {
+      ObjectsDeleteAll(0, "CCOMP_WickHL_");
+      return;
+     }
+
+   for(int h = 0; h < g_wickHistoryCount; h++)
+     {
+      if(g_wickHistory[h].symbol == _Symbol && g_wickHistory[h].tf == _Period)
+        {
+         datetime barTime = g_wickHistory[h].barTime;
+         string objName = "CCOMP_WickHL_" + IntegerToString((long)barTime);
+         
+         if(ObjectFind(0, objName) < 0)
+           {
+            int barIndex = iBarShift(_Symbol, _Period, barTime);
+            if(barIndex >= 0)
+              {
+               double high = iHigh(_Symbol, _Period, barIndex);
+               double low  = iLow(_Symbol, _Period, barIndex);
+               
+               ObjectCreate(0, objName, OBJ_RECTANGLE, 0, barTime, high, barTime, low);
+               ObjectSetInteger(0, objName, OBJPROP_COLOR, WickHighlightColor);
+               ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+               ObjectSetInteger(0, objName, OBJPROP_WIDTH, WickHighlightWidth);
+               ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+               ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+               ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+              }
+           }
+        }
+     }
 }
