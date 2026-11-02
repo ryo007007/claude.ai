@@ -85,7 +85,7 @@ input bool   WickAlertOn      = true;    // 髭検知時にアラートを出す
 input group "=== 髭検知 強調表示 ==="
 input bool   WickHighlightEnable = true;      // 髭検知足をチャート上で強調表示する
 input color  WickHighlightColor  = clrYellow; // 強調表示の色
-input int    WickHighlightWidth  = 4;         // 強調表示の枠線太さ
+input int    WickHighlightWidth  = 5;         // 強調表示の枠線太さ
 
 input group "=== 髭検知 強調クリアボタン位置 ==="
 input int    WickBtnX = 100;  // ボタンX（右下隅からの距離。大きいほど左）
