@@ -193,11 +193,6 @@ color CCOMP_StateColor(const CCOMP_STATE st)
   }
 
 //+------------------------------------------------------------------+
-//| 急変状態の保存・復元                                               |
-//| 行クリックでチャートの通貨/時間足が変わるとインジケーターが         |
-//| 読み込み直されるため、急変の保持状態を端末のグローバル変数に        |
-//| 保存して引き継ぐ。                                                 |
-//+------------------------------------------------------------------+
 string TFName(const ENUM_TIMEFRAMES tf)
   {
    string s = EnumToString(tf);
@@ -246,7 +241,6 @@ void SaveSuppressed(const int i, const bool on)
       GlobalVariableDel(k);
   }
 
-//--- 同じ行・同じ種類のイベントを、続けて記録しない(連続する急変を1つの急変として数える)
 bool EpisodeFire(const int i, const string field, const datetime now)
   {
    string key = GVKey(i, field);
@@ -1580,7 +1574,7 @@ void DrawWickPanel()
       ObjectCreate(0, btnClear, OBJ_BUTTON, 0, 0, 0);
       ObjectSetInteger(0, btnClear, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
       ObjectSetInteger(0, btnClear, OBJPROP_XDISTANCE, WickBtnX);
-      ObjectSetInteger(0, btnClear, OBJPROP_YDISTANCE, WickBtnY);
+      ObjectSetInteger(0, btnClear, OBJPROP_YDISTANCE, WickBtnY+5);
       ObjectSetInteger(0, btnClear, OBJPROP_XSIZE, 80);
       ObjectSetInteger(0, btnClear, OBJPROP_YSIZE, 18);
       ObjectSetInteger(0, btnClear, OBJPROP_FONTSIZE, 8);
@@ -1588,7 +1582,6 @@ void DrawWickPanel()
       ObjectSetInteger(0, btnClear, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, btnClear, OBJPROP_HIDDEN, true);
      }
-   // トグル状態に応じたテキストと色の切り替え
    string btnText = g_wickHL_On ? "強調: ON" : "強調: OFF";
    ObjectSetString(0, btnClear, OBJPROP_TEXT, btnText);
    ObjectSetInteger(0, btnClear, OBJPROP_BGCOLOR, g_wickHL_On ? clrDarkSlateGray : clrDimGray);
@@ -1607,8 +1600,8 @@ void DrawWickPanel()
       ObjectSetInteger(0, titleName, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
       ObjectSetInteger(0, titleName, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
      }
-   ObjectSetInteger(0, titleName, OBJPROP_XDISTANCE, WickBtnX + 20); // ボタンのすぐ左に配置
-   ObjectSetInteger(0, titleName, OBJPROP_YDISTANCE, WickBtnY - 15);
+   ObjectSetInteger(0, titleName, OBJPROP_XDISTANCE, WickBtnX + 35);
+   ObjectSetInteger(0, titleName, OBJPROP_YDISTANCE, WickBtnY - 8);
    ObjectSetString(0, titleName, OBJPROP_TEXT, StringFormat("最新%d件 (×%.1f / ≥%.0f%%)", g_wickHistoryCount, WickRangeMult, WickMinRatio * 100));
    ObjectSetInteger(0, titleName, OBJPROP_COLOR, clrYellow);
 
@@ -1634,7 +1627,10 @@ void DrawWickPanel()
       string tfName = EnumToString(item.tf);
       StringReplace(tfName, "PERIOD_", "");
       
-      string timeStr = TimeToString(item.barTime, TIME_MINUTES);
+      // サーバー時間を日本時間(JST, UTC+9)に変換
+      int offset = (int)((TimeGMT() - TimeTradeServer()) / 3600) + 9;
+      datetime jstTime = item.barTime + (datetime)(offset * 3600);
+      string timeStr = TimeToString(jstTime, TIME_MINUTES);
       
       string text = StringFormat("%-9s %-4s %s髭 %s 割合%.0f%% 倍率%.1f",
                                  item.symbol, tfName,
