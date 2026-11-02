@@ -85,7 +85,7 @@ input bool   WickAlertOn      = true;    // 髭検知時にアラートを出す
 input group "=== 髭検知 強調表示 ==="
 input bool   WickHighlightEnable = true;      // 髭検知足をチャート上で強調表示する
 input color  WickHighlightColor  = clrYellow; // 強調表示の色
-input int    WickHighlightWidth  = 2;         // 強調表示の枠線太さ
+input int    WickHighlightWidth  = 4;         // 強調表示の枠線太さ
 
 input group "=== 髭検知 強調クリアボタン位置 ==="
 input int    WickBtnX = 100;  // ボタンX（右下隅からの距離。大きいほど左）
@@ -1661,30 +1661,37 @@ void DrawWickHighlights()
       return;
      }
 
+   datetime barSec = (datetime)PeriodSeconds(_Period);
+
    for(int h = 0; h < g_wickHistoryCount; h++)
      {
       if(g_wickHistory[h].symbol == _Symbol && g_wickHistory[h].tf == _Period)
         {
          datetime barTime = g_wickHistory[h].barTime;
          string objName = "CCOMP_WickHL_" + IntegerToString((long)barTime);
-         
+
+         int barIndex = iBarShift(_Symbol, _Period, barTime);
+         if(barIndex < 0)
+            continue;
+
+         double high = iHigh(_Symbol, _Period, barIndex);
+         double low  = iLow(_Symbol, _Period, barIndex);
+         datetime t2 = barTime + barSec;
+
          if(ObjectFind(0, objName) < 0)
-           {
-            int barIndex = iBarShift(_Symbol, _Period, barTime);
-            if(barIndex >= 0)
-              {
-               double high = iHigh(_Symbol, _Period, barIndex);
-               double low  = iLow(_Symbol, _Period, barIndex);
-               
-               ObjectCreate(0, objName, OBJ_RECTANGLE, 0, barTime, high, barTime, low);
-               ObjectSetInteger(0, objName, OBJPROP_COLOR, WickHighlightColor);
-               ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
-               ObjectSetInteger(0, objName, OBJPROP_WIDTH, WickHighlightWidth);
-               ObjectSetInteger(0, objName, OBJPROP_BACK, true);
-               ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-               ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
-              }
-           }
+            ObjectCreate(0, objName, OBJ_RECTANGLE, 0, barTime, high, t2, low);
+
+         ObjectSetInteger(0, objName, OBJPROP_TIME, 0, barTime);
+         ObjectSetInteger(0, objName, OBJPROP_TIME, 1, t2);
+         ObjectSetDouble(0, objName, OBJPROP_PRICE, 0, high);
+         ObjectSetDouble(0, objName, OBJPROP_PRICE, 1, low);
+         ObjectSetInteger(0, objName, OBJPROP_COLOR, WickHighlightColor);
+         ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+         ObjectSetInteger(0, objName, OBJPROP_WIDTH, WickHighlightWidth);
+         ObjectSetInteger(0, objName, OBJPROP_FILL, false);
+         ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+         ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
         }
      }
 }
