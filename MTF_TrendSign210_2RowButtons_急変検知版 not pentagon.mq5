@@ -6,8 +6,8 @@
 #property copyright "Custom MTF Trend Sign 210"
 #property version   "5.32"
 #property indicator_chart_window
-#property indicator_buffers 18
-#property indicator_plots   14
+#property indicator_buffers 10
+#property indicator_plots   6
 
 #property indicator_type1   DRAW_ARROW
 #property indicator_color1  clrLime
@@ -20,63 +20,23 @@
 #property indicator_label2  "SellSignal"
 
 #property indicator_type3   DRAW_LINE
-#property indicator_color3  clrYellow
-#property indicator_width3  2
-#property indicator_label3  "Weekly Fast EMA"
+#property indicator_color3  clrAqua
+#property indicator_width3  1
+#property indicator_label3  "BB Upper"
 
 #property indicator_type4   DRAW_LINE
-#property indicator_color4  clrOrange
-#property indicator_width4  1
-#property indicator_label4  "Weekly Slow EMA"
+#property indicator_color4  clrSilver
+#property indicator_style4  STYLE_DOT
+#property indicator_label4  "BB Middle"
 
 #property indicator_type5   DRAW_LINE
-#property indicator_color5  clrRed
-#property indicator_width5  2
-#property indicator_label5  "Upper Fast EMA"
+#property indicator_color5  clrAqua
+#property indicator_width5  1
+#property indicator_label5  "BB Lower"
 
-#property indicator_type6   DRAW_LINE
-#property indicator_color6  clrMaroon
-#property indicator_width6  1
-#property indicator_label6  "Upper Slow EMA"
-
-#property indicator_type7   DRAW_LINE
-#property indicator_color7  clrLime
-#property indicator_width7  2
-#property indicator_label7  "Middle Fast EMA"
-
-#property indicator_type8   DRAW_LINE
-#property indicator_color8  clrGreen
-#property indicator_width8  1
-#property indicator_label8  "Middle Slow EMA"
-
-#property indicator_type9   DRAW_LINE
-#property indicator_color9  clrDodgerBlue
-#property indicator_width9  2
-#property indicator_label9  "Lower Fast EMA"
-
-#property indicator_type10  DRAW_LINE
-#property indicator_color10 clrBlue
-#property indicator_width10 1
-#property indicator_label10 "Lower Slow EMA"
-
-#property indicator_type11  DRAW_LINE
-#property indicator_color11 clrAqua
-#property indicator_width11 1
-#property indicator_label11 "BB Upper"
-
-#property indicator_type12  DRAW_LINE
-#property indicator_color12 clrSilver
-#property indicator_style12 STYLE_DOT
-#property indicator_label12 "BB Middle"
-
-#property indicator_type13  DRAW_LINE
-#property indicator_color13 clrAqua
-#property indicator_width13 1
-#property indicator_label13 "BB Lower"
-
-#property indicator_type14  DRAW_COLOR_CANDLES
-#property indicator_color14 clrLime, clrRed
-#property indicator_label14 "Heikin Ashi"
+#property indicator_type6   DRAW_COLOR_CANDLES
+#property indicator_color6  clrLime, clrRed
+#property indicator_label6  "Heikin Ashi"
 
 //---------------- 急変検知モジュール ----------------
 #include "MarketEngines/SuddenMoveDetectorOriginal.mqh"
@@ -89,17 +49,7 @@ input ENUM_TIMEFRAMES TF_Upper    = PERIOD_M15;  // 上位足（15分足）
 input ENUM_TIMEFRAMES TF_Middle   = PERIOD_M5;   // 中位足（5分足）
 input ENUM_TIMEFRAMES TF_Lower    = PERIOD_M1;   // 下位足（1分足）
 
-input int    EMA_Fast_Period = 4;    // 短期EMA期間
-input int    EMA_Slow_Period = 8;    // 長期EMA期間
 input int    Slope_Lookback  = 2;    // 傾き判定に使う本数（Nバー前と比較）
-
-//---------------- トレンド判定方式 ----------------
-enum ENUM_TREND_METHOD
-  {
-   TREND_METHOD_EMA    = 0, // 移動平均線（EMA）
-   TREND_METHOD_HEIKIN = 1  // 平均足（Heikin Ashi）
-  };
-input ENUM_TREND_METHOD TrendMethod = TREND_METHOD_EMA; // トレンド判定方式
 input int    HA_HistoryBars = 30; // 平均足計算に使う履歴本数（安定化用）
 
 //---------------- ボリンジャーバンド設定 ----------------
@@ -119,13 +69,6 @@ input int    RSI_LineWidth    = 2;              // RSI線の太さ
 //---------------- 200BB外の強調フィルター設定 ----------------
 input double BB_Filter_Dev   = 2.0;        // 日足・週足200BBの超過判定σ値
 input color  PanelExceedColor = clrMagenta; // 200BB外にある通貨ペアの強調カラー
-
-//---------------- トレンド判定用EMA線をチャートに表示 ----------------
-input bool Show_Weekly_Default = true;   
-input bool Show_Upper_Default  = true;   
-input bool Show_Middle_Default = true;   
-input bool Show_Lower_Default  = true;   
-input int  MaxHighTFBars = 3000;  
 
 //---------------- Pivot設定 ----------------
 input bool  Show_DP_Default  = true;     // 日足Pivot(DP)初期状態
@@ -187,14 +130,6 @@ input bool  OpenInNewChart = false;
 //---------------- バッファ ----------------
 double BuySignalBuffer[];
 double SellSignalBuffer[];
-double WeeklyFastBuffer[];
-double WeeklySlowBuffer[];
-double UpperFastBuffer[];
-double UpperSlowBuffer[];
-double MiddleFastBuffer[];
-double MiddleSlowBuffer[];
-double LowerFastBuffer[];
-double LowerSlowBuffer[];
 double BBUpperBuffer[];
 double BBMiddleBuffer[];
 double BBLowerBuffer[];
@@ -208,11 +143,6 @@ double HAColorBuffer[];
 string g_symbols[];
 int    g_symbolCount = 0;
 int    g_currentSymbolIndex = -1;
-
-int g_hWeeklyFast[],  g_hWeeklySlow[];
-int g_hUpperFast[],   g_hUpperSlow[];
-int g_hMiddleFast[],  g_hMiddleSlow[];
-int g_hLowerFast[],   g_hLowerSlow[];
 
 int g_hBB_Daily[];
 int g_hBB_Weekly[];
@@ -235,14 +165,9 @@ datetime g_lastSignalBarTimeNoWeekly[];
 bool     g_useWeeklyFilterPerSymbol[]; 
 
 datetime g_lastResetBoundary = 0;
-bool     g_maLinesFilled = false;
 bool     g_pivotDPReady = false; // 日足Pivotの描画に必要なデータが揃ったか
 bool     g_pivotWPReady = false; // 週足Pivotの描画に必要なデータが揃ったか
 
-bool g_showWeekly   = true;
-bool g_showUpper    = true;
-bool g_showMiddle   = true;
-bool g_showLower    = true;
 bool g_showBB       = true;
 bool g_showHA       = false;
 bool g_showRSI      = false;
@@ -276,10 +201,6 @@ ulong     g_lastBtnClickTick = 0;
 #define BTN_RSI      "MTF_Btn_RSI"
 #define BTN_WP       "MTF_Btn_WP"
 #define BTN_DP       "MTF_Btn_DP"
-#define BTN_WEEKLY   "MTF_Btn_Weekly"
-#define BTN_UPPER    "MTF_Btn_Upper"
-#define BTN_MIDDLE   "MTF_Btn_Middle"
-#define BTN_LOWER    "MTF_Btn_Lower"
 #define BTN_HIDE     "MTF_Btn_Hide"
 
 #define PIVOT_DP_PREFIX "MTF_Pivot_DP_"
@@ -385,12 +306,8 @@ void CreateAllMAButtons()
    int yRow1 = MAButton_Y + 25; // 上段
    int yRow2 = MAButton_Y;      // 下段
 
-   // 上段の配置 (右から順に: 下, 中, 上, 週, BB, HA)
+   // 上段の配置 (右から順に: BB, HA)
    int x = MAButton_X;
-   CreateSingleButtonAbs(BTN_LOWER,  btnW, x, yRow1); x += btnW + gap;
-   CreateSingleButtonAbs(BTN_MIDDLE, btnW, x, yRow1); x += btnW + gap;
-   CreateSingleButtonAbs(BTN_UPPER,  btnW, x, yRow1); x += btnW + gap;
-   CreateSingleButtonAbs(BTN_WEEKLY, btnW, x, yRow1); x += btnW + gap;
    CreateSingleButtonAbs(BTN_BB,     btnW, x, yRow1); x += btnW + gap;
    CreateSingleButtonAbs(BTN_HA,     btnW, x, yRow1);
 
@@ -403,10 +320,6 @@ void CreateAllMAButtons()
 
    UpdateMAButtonLook(BTN_BB,     "BB", g_showBB,     clrCyan);
    UpdateMAButtonLook(BTN_HA,     "HA", g_showHA,     clrMediumSpringGreen);
-   UpdateMAButtonLook(BTN_WEEKLY, "週", g_showWeekly, clrYellow);
-   UpdateMAButtonLook(BTN_UPPER,  "上", g_showUpper,  clrOrangeRed);
-   UpdateMAButtonLook(BTN_MIDDLE, "中", g_showMiddle, clrLime);
-   UpdateMAButtonLook(BTN_LOWER,  "下", g_showLower,  clrDeepSkyBlue);
 
    UpdateMAButtonLook(BTN_WP,     "WP", g_showWP,     clrGold);
    UpdateMAButtonLook(BTN_DP,     "DP", g_showDP,     clrOrange);
@@ -657,45 +570,28 @@ int OnInit()
 {
    SetIndexBuffer(0, BuySignalBuffer, INDICATOR_DATA);
    SetIndexBuffer(1, SellSignalBuffer, INDICATOR_DATA);
-   SetIndexBuffer(2, WeeklyFastBuffer, INDICATOR_DATA);
-   SetIndexBuffer(3, WeeklySlowBuffer, INDICATOR_DATA);
-   SetIndexBuffer(4, UpperFastBuffer,  INDICATOR_DATA);
-   SetIndexBuffer(5, UpperSlowBuffer,  INDICATOR_DATA);
-   SetIndexBuffer(6, MiddleFastBuffer, INDICATOR_DATA);
-   SetIndexBuffer(7, MiddleSlowBuffer, INDICATOR_DATA);
-   SetIndexBuffer(8, LowerFastBuffer,  INDICATOR_DATA);
-   SetIndexBuffer(9, LowerSlowBuffer,  INDICATOR_DATA);
-   SetIndexBuffer(10, BBUpperBuffer,    INDICATOR_DATA);
-   SetIndexBuffer(11, BBMiddleBuffer,   INDICATOR_DATA);
-   SetIndexBuffer(12, BBLowerBuffer,    INDICATOR_DATA);
-   SetIndexBuffer(13, HAOpenBuffer,     INDICATOR_DATA);
-   SetIndexBuffer(14, HAHighBuffer,     INDICATOR_DATA);
-   SetIndexBuffer(15, HALowBuffer,      INDICATOR_DATA);
-   SetIndexBuffer(16, HACloseBuffer,    INDICATOR_DATA);
-   SetIndexBuffer(17, HAColorBuffer,    INDICATOR_COLOR_INDEX);
+   SetIndexBuffer(2, BBUpperBuffer,    INDICATOR_DATA);
+   SetIndexBuffer(3, BBMiddleBuffer,   INDICATOR_DATA);
+   SetIndexBuffer(4, BBLowerBuffer,    INDICATOR_DATA);
+   SetIndexBuffer(5, HAOpenBuffer,     INDICATOR_DATA);
+   SetIndexBuffer(6, HAHighBuffer,     INDICATOR_DATA);
+   SetIndexBuffer(7, HALowBuffer,      INDICATOR_DATA);
+   SetIndexBuffer(8, HACloseBuffer,    INDICATOR_DATA);
+   SetIndexBuffer(9, HAColorBuffer,    INDICATOR_COLOR_INDEX);
 
    PlotIndexSetInteger(0, PLOT_ARROW, 233);
    PlotIndexSetInteger(1, PLOT_ARROW, 234);
 
    // 平均足の2色（陽線=0, 陰線=1）
-   PlotIndexSetInteger(13, PLOT_COLOR_INDEXES, 2);
-   PlotIndexSetInteger(13, PLOT_LINE_COLOR, 0, HA_BullColor);
-   PlotIndexSetInteger(13, PLOT_LINE_COLOR, 1, HA_BearColor);
+   PlotIndexSetInteger(5, PLOT_COLOR_INDEXES, 2);
+   PlotIndexSetInteger(5, PLOT_LINE_COLOR, 0, HA_BullColor);
+   PlotIndexSetInteger(5, PLOT_LINE_COLOR, 1, HA_BearColor);
 
-   for(int p = 0; p < 14; p++)
+   for(int p = 0; p < 6; p++)
       PlotIndexSetDouble(p, PLOT_EMPTY_VALUE, EMPTY_VALUE);
 
    g_symbolCount = ParseSymbols(InpSymbols, g_symbols);
    if(g_symbolCount <= 0) return(INIT_FAILED);
-
-   ArrayResize(g_hWeeklyFast, g_symbolCount);
-   ArrayResize(g_hWeeklySlow, g_symbolCount);
-   ArrayResize(g_hUpperFast,  g_symbolCount);
-   ArrayResize(g_hUpperSlow,  g_symbolCount);
-   ArrayResize(g_hMiddleFast, g_symbolCount);
-   ArrayResize(g_hMiddleSlow, g_symbolCount);
-   ArrayResize(g_hLowerFast,  g_symbolCount);
-   ArrayResize(g_hLowerSlow,  g_symbolCount);
 
    ArrayResize(g_hBB_Daily,   g_symbolCount);
    ArrayResize(g_hBB_Weekly,  g_symbolCount);
@@ -752,15 +648,6 @@ int OnInit()
 
       SymbolSelect(sym, true);
 
-      g_hWeeklyFast[i] = iMA(sym, TF_Weekly, EMA_Fast_Period, 0, MODE_EMA, PRICE_CLOSE);
-      g_hWeeklySlow[i] = iMA(sym, TF_Weekly, EMA_Slow_Period, 0, MODE_EMA, PRICE_CLOSE);
-      g_hUpperFast[i]  = iMA(sym, TF_Upper,  EMA_Fast_Period, 0, MODE_EMA, PRICE_CLOSE);
-      g_hUpperSlow[i]  = iMA(sym, TF_Upper,  EMA_Slow_Period, 0, MODE_EMA, PRICE_CLOSE);
-      g_hMiddleFast[i] = iMA(sym, TF_Middle, EMA_Fast_Period, 0, MODE_EMA, PRICE_CLOSE);
-      g_hMiddleSlow[i] = iMA(sym, TF_Middle, EMA_Slow_Period, 0, MODE_EMA, PRICE_CLOSE);
-      g_hLowerFast[i]  = iMA(sym, TF_Lower,  EMA_Fast_Period, 0, MODE_EMA, PRICE_CLOSE);
-      g_hLowerSlow[i]  = iMA(sym, TF_Lower,  EMA_Slow_Period, 0, MODE_EMA, PRICE_CLOSE);
-
       g_hBB_Daily[i]  = iBands(sym, TF_Upper,  Bands_Period, 0, BB_Filter_Dev, PRICE_CLOSE);
       g_hBB_Weekly[i] = iBands(sym, TF_Weekly, Bands_Period, 0, BB_Filter_Dev, PRICE_CLOSE);
       g_hBB_H4[i]     = iBands(sym, PERIOD_H4, Bands_Period, 0, BB_Filter_Dev, PRICE_CLOSE);
@@ -799,12 +686,7 @@ int OnInit()
       PrintFormat("急変検知モジュール: 監視対象のJPYクロスが見つかりませんでした（InpSymbolsを確認してください）");
 
    g_lastResetBoundary = GetCurrentResetBoundary();
-   g_maLinesFilled = false;
 
-   g_showWeekly = Show_Weekly_Default;
-   g_showUpper  = Show_Upper_Default;
-   g_showMiddle = Show_Middle_Default;
-   g_showLower  = Show_Lower_Default;
    g_showBB     = Show_BB_Default;
    g_showHA     = Show_HA_Default;
    g_showRSI    = Show_RSI_Default;
@@ -834,10 +716,6 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, PIVOT_WP_PREFIX);
    AttachRSITrendlines(false);
 
-   ObjectDelete(0, BTN_WEEKLY);
-   ObjectDelete(0, BTN_UPPER);
-   ObjectDelete(0, BTN_MIDDLE);
-   ObjectDelete(0, BTN_LOWER);
    ObjectDelete(0, BTN_BB);
    ObjectDelete(0, BTN_HA);
    ObjectDelete(0, BTN_RSI);
@@ -849,29 +727,6 @@ void OnDeinit(const int reason)
 
    if(g_smdInitialized) SMD_Deinit();
 
-}
-
-//+------------------------------------------------------------------+
-//| EMAによるトレンド判定（従来仕様）                                   |
-//|  短期EMAが長期EMAの上＆上向き → 上昇(1)                            |
-//|  短期EMAが長期EMAの下＆下向き → 下降(-1)                           |
-//+------------------------------------------------------------------+
-int GetTrendEMA(int hFast, int hSlow)
-{
-   if(hFast == INVALID_HANDLE || hSlow == INVALID_HANDLE) return 0;
-   double fastArr[], slowArr[];
-   ArraySetAsSeries(fastArr, true); ArraySetAsSeries(slowArr, true);
-   int need = Slope_Lookback + 2;
-   if(CopyBuffer(hFast, 0, 0, need, fastArr) < need) return 0;
-   if(CopyBuffer(hSlow, 0, 0, need, slowArr) < need) return 0;
-
-   bool fastAboveSlow = fastArr[0] > slowArr[0];
-   bool fastBelowSlow = fastArr[0] < slowArr[0];
-   double slope = fastArr[0] - fastArr[Slope_Lookback];
-
-   if(fastAboveSlow && slope > 0) return 1;
-   if(fastBelowSlow && slope < 0) return -1;
-   return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -907,7 +762,7 @@ int GetTrendHeikin(const string sym, const ENUM_TIMEFRAMES tf)
       haOpen[i]  = (haOpen[i + 1] + haClose[i + 1]) * 0.5;
      }
 
-   // 最新バー（EMA版の buffer[0] と揃える）
+   // 最新バー
    const int s = 0;
    const int sLook = Slope_Lookback;
    if(sLook >= hist) return 0;
@@ -919,22 +774,6 @@ int GetTrendHeikin(const string sym, const ENUM_TIMEFRAMES tf)
    if(bull && slope > 0.0) return 1;
    if(bear && slope < 0.0) return -1;
    return 0;
-}
-
-//+------------------------------------------------------------------+
-//| 判定方式に応じてトレンドを返す（1=上昇, -1=下降, 0=中立）           |
-//+------------------------------------------------------------------+
-int GetTrend(const string sym, const ENUM_TIMEFRAMES tf, int hFast, int hSlow)
-{
-   if(TrendMethod == TREND_METHOD_HEIKIN)
-      return GetTrendHeikin(sym, tf);
-   return GetTrendEMA(hFast, hSlow);
-}
-
-// 後方互換（ハンドルのみ渡す呼び出し用）
-int GetTrend(int hFast, int hSlow)
-{
-   return GetTrendEMA(hFast, hSlow);
 }
 
 int CheckBBExceed(string sym, ENUM_TIMEFRAMES tf, int hBB)
@@ -1224,58 +1063,6 @@ void DrawPanelLabel(string name, int y, string text, color clr)
       ObjectSetInteger(0, name, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
 }
 
-bool IsHigherTFReady(string sym, ENUM_TIMEFRAMES tf, int hFast, int hSlow)
-{
-   int availableBars = Bars(sym, tf);
-   if(availableBars <= 0) return false;
-
-   // 平均足モード: 価格履歴があれば描画準備OK（線はEMA表示用）
-   if(TrendMethod == TREND_METHOD_HEIKIN)
-     {
-      int needHA = Slope_Lookback + 5;
-      if(HA_HistoryBars > needHA) needHA = HA_HistoryBars;
-      return (availableBars >= needHA);
-     }
-
-   int need = MathMin(availableBars, MaxHighTFBars);
-   if(need <= 0) return false;
-   if(hFast == INVALID_HANDLE || hSlow == INVALID_HANDLE) return false;
-   double tmp[];
-   if(CopyBuffer(hFast, 0, 0, need, tmp) < need) return false;
-   if(CopyBuffer(hSlow, 0, 0, need, tmp) < need) return false;
-   return true;
-}
-
-void FillHigherTFLine(string sym, ENUM_TIMEFRAMES tf, int hFast, int hSlow,
-                      const datetime &lowTime[], int lowStart, int lowTotal,
-                      double &fastBuf[], double &slowBuf[])
-{
-   int availableBars = Bars(sym, tf);
-   if(availableBars <= 0) return;
-   int highBars = MathMin(availableBars, MaxHighTFBars);
-
-   double fastArr[], slowArr[]; datetime timeArr[];
-   ArraySetAsSeries(fastArr, false); ArraySetAsSeries(slowArr, false); ArraySetAsSeries(timeArr, false);
-
-   int cf = CopyBuffer(hFast, 0, 0, highBars, fastArr);
-   int cs = CopyBuffer(hSlow, 0, 0, highBars, slowArr);
-   int ct = CopyTime(sym, tf, 0, highBars, timeArr);
-   int n = MathMin(cf, MathMin(cs, ct));
-   if(n <= 0) return;
-
-   int j = 0;
-   for(int i = lowStart; i < lowTotal; i++)
-   {
-      datetime t = lowTime[i];
-      while(j + 1 < n && timeArr[j + 1] <= t) j++;
-      if(timeArr[j] <= t)
-      {
-         fastBuf[i] = fastArr[j];
-         slowBuf[i] = slowArr[j];
-      }
-   }
-}
-
 //+------------------------------------------------------------------+
 //| メイン計算                                                       |
 //+------------------------------------------------------------------+
@@ -1351,7 +1138,7 @@ void AttachRSITrendlines(const bool attach)
 
 void ApplyHAVisibility()
 {
-   PlotIndexSetInteger(13, PLOT_DRAW_TYPE, g_showHA ? DRAW_COLOR_CANDLES : DRAW_NONE);
+   PlotIndexSetInteger(5, PLOT_DRAW_TYPE, g_showHA ? DRAW_COLOR_CANDLES : DRAW_NONE);
 }
 
 //+------------------------------------------------------------------+
@@ -1483,26 +1270,13 @@ int OnCalculate(const int rates_total,
       }
    }
 
-   PlotIndexSetInteger(2, PLOT_DRAW_TYPE, g_showWeekly ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(3, PLOT_DRAW_TYPE, g_showWeekly ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(4, PLOT_DRAW_TYPE, g_showUpper  ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(5, PLOT_DRAW_TYPE, g_showUpper  ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(6, PLOT_DRAW_TYPE, g_showMiddle ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(7, PLOT_DRAW_TYPE, g_showMiddle ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(8, PLOT_DRAW_TYPE, g_showLower  ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(9, PLOT_DRAW_TYPE, g_showLower  ? DRAW_LINE : DRAW_NONE);
-
-   PlotIndexSetInteger(10, PLOT_DRAW_TYPE, g_showBB ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(11, PLOT_DRAW_TYPE, g_showBB ? DRAW_LINE : DRAW_NONE);
-   PlotIndexSetInteger(12, PLOT_DRAW_TYPE, g_showBB ? DRAW_LINE : DRAW_NONE);
+   PlotIndexSetInteger(2, PLOT_DRAW_TYPE, g_showBB ? DRAW_LINE : DRAW_NONE);
+   PlotIndexSetInteger(3, PLOT_DRAW_TYPE, g_showBB ? DRAW_LINE : DRAW_NONE);
+   PlotIndexSetInteger(4, PLOT_DRAW_TYPE, g_showBB ? DRAW_LINE : DRAW_NONE);
 
    for(int i = start; i < rates_total; i++)
    {
       BuySignalBuffer[i]  = EMPTY_VALUE; SellSignalBuffer[i] = EMPTY_VALUE;
-      WeeklyFastBuffer[i] = EMPTY_VALUE; WeeklySlowBuffer[i] = EMPTY_VALUE;
-      UpperFastBuffer[i]  = EMPTY_VALUE; UpperSlowBuffer[i]  = EMPTY_VALUE;
-      MiddleFastBuffer[i] = EMPTY_VALUE; MiddleSlowBuffer[i] = EMPTY_VALUE;
-      LowerFastBuffer[i]  = EMPTY_VALUE; LowerSlowBuffer[i]  = EMPTY_VALUE;
       BBUpperBuffer[i]    = EMPTY_VALUE; BBMiddleBuffer[i]   = EMPTY_VALUE; BBLowerBuffer[i] = EMPTY_VALUE;
    }
 
@@ -1531,40 +1305,6 @@ int OnCalculate(const int rates_total,
       //--- 平均足（チャート表示用）。ON/OFFに関わらず計算しておき、切替を即時にする
    FillHeikinAshi(rates_total, open, high, low, close, prev_calculated);
 
-   //--- RSIトレンドライン（ボタンON時のみ）
-
-
-if(g_currentSymbolIndex >= 0)
-   {
-      int ci = g_currentSymbolIndex;
-      string curSym = g_symbols[ci];
-
-      if(!g_maLinesFilled)
-      {
-         bool allReady =
-            (!g_showWeekly || IsHigherTFReady(curSym, TF_Weekly, g_hWeeklyFast[ci], g_hWeeklySlow[ci])) &&
-            (!g_showUpper  || IsHigherTFReady(curSym, TF_Upper,  g_hUpperFast[ci],  g_hUpperSlow[ci]))  &&
-            (!g_showMiddle || IsHigherTFReady(curSym, TF_Middle, g_hMiddleFast[ci], g_hMiddleSlow[ci])) &&
-            (!g_showLower  || IsHigherTFReady(curSym, TF_Lower,  g_hLowerFast[ci],  g_hLowerSlow[ci]));
-
-         if(allReady)
-         {
-            if(g_showWeekly) FillHigherTFLine(curSym, TF_Weekly, g_hWeeklyFast[ci], g_hWeeklySlow[ci], time, 0, rates_total, WeeklyFastBuffer, WeeklySlowBuffer);
-            if(g_showUpper)  FillHigherTFLine(curSym, TF_Upper,  g_hUpperFast[ci],  g_hUpperSlow[ci],  time, 0, rates_total, UpperFastBuffer, UpperSlowBuffer);
-            if(g_showMiddle) FillHigherTFLine(curSym, TF_Middle, g_hMiddleFast[ci], g_hMiddleSlow[ci], time, 0, rates_total, MiddleFastBuffer, MiddleSlowBuffer);
-            if(g_showLower)  FillHigherTFLine(curSym, TF_Lower,  g_hLowerFast[ci],  g_hLowerSlow[ci],  time, 0, rates_total, LowerFastBuffer, LowerSlowBuffer);
-            g_maLinesFilled = true;
-         }
-      }
-      else
-      {
-         if(g_showWeekly) FillHigherTFLine(curSym, TF_Weekly, g_hWeeklyFast[ci], g_hWeeklySlow[ci], time, start, rates_total, WeeklyFastBuffer, WeeklySlowBuffer);
-         if(g_showUpper)  FillHigherTFLine(curSym, TF_Upper,  g_hUpperFast[ci],  g_hUpperSlow[ci],  time, start, rates_total, UpperFastBuffer, UpperSlowBuffer);
-         if(g_showMiddle) FillHigherTFLine(curSym, TF_Middle, g_hMiddleFast[ci], g_hMiddleSlow[ci], time, start, rates_total, MiddleFastBuffer, MiddleSlowBuffer);
-         if(g_showLower)  FillHigherTFLine(curSym, TF_Lower,  g_hLowerFast[ci],  g_hLowerSlow[ci],  time, start, rates_total, LowerFastBuffer, LowerSlowBuffer);
-      }
-   }
-
    //--- パネル描画の負荷軽減判定（1秒に1回だけ true になる）
    bool shouldDraw = false;
    if(UsePanel)
@@ -1586,10 +1326,6 @@ if(g_currentSymbolIndex >= 0)
          totalSignals += g_signalCount[s];
          totalSignalsNoW += g_signalCountNoWeekly[s];
       }
-      string maStatus = (g_currentSymbolIndex < 0) ? "MA:対象外" : (g_maLinesFilled ? "MA:表示中" : "MA:準備中");
-
-      string methodTag = (TrendMethod == TREND_METHOD_HEIKIN) ? "平均足" : "EMA";
-
       int smdUpCnt = 0, smdDownCnt = 0;
       if(g_smdInitialized)
       {
@@ -1601,16 +1337,16 @@ if(g_currentSymbolIndex >= 0)
          : "";
 
       DrawPanelLabel("MTF_Panel_Title", GetPanelY(0),
-         StringFormat("MTF[%s 週/上/中/下] 合計:%d/%d %s%s", methodTag, totalSignals, totalSignalsNoW, maStatus, smdSummary), clrWhite);
+         StringFormat("MTF[平均足 週/上/中/下] 合計:%d/%d%s", totalSignals, totalSignalsNoW, smdSummary), clrWhite);
    }
 
    for(int i = 0; i < g_symbolCount; i++)
    {
       string sym = g_symbols[i];
-      int tWeekly = GetTrend(sym, TF_Weekly, g_hWeeklyFast[i], g_hWeeklySlow[i]);
-      int tUp     = GetTrend(sym, TF_Upper,  g_hUpperFast[i],  g_hUpperSlow[i]);
-      int tMid    = GetTrend(sym, TF_Middle, g_hMiddleFast[i], g_hMiddleSlow[i]);
-      int tLow    = GetTrend(sym, TF_Lower,  g_hLowerFast[i],  g_hLowerSlow[i]);
+      int tWeekly = GetTrendHeikin(sym, TF_Weekly);
+      int tUp     = GetTrendHeikin(sym, TF_Upper);
+      int tMid    = GetTrendHeikin(sym, TF_Middle);
+      int tLow    = GetTrendHeikin(sym, TF_Lower);
 
       int bbDailyExceed  = CheckBBExceed(sym, TF_Upper,  g_hBB_Daily[i]);
       int bbWeeklyExceed = CheckBBExceed(sym, TF_Weekly, g_hBB_Weekly[i]);
@@ -1855,39 +1591,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
          ChartRedraw(0); return;
       }
-      if(sparam == BTN_WEEKLY)
-      {
-         g_lastBtnClickTick = GetTickCount64();
-         g_showWeekly = !g_showWeekly;
-         UpdateMAButtonLook(BTN_WEEKLY, "週", g_showWeekly, clrYellow);
-         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
-         ChartRedraw(0); return;
-      }
-      if(sparam == BTN_UPPER)
-      {
-         g_lastBtnClickTick = GetTickCount64();
-         g_showUpper = !g_showUpper;
-         UpdateMAButtonLook(BTN_UPPER, "上", g_showUpper, clrOrangeRed);
-         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
-         ChartRedraw(0); return;
-      }
-      if(sparam == BTN_MIDDLE)
-      {
-         g_lastBtnClickTick = GetTickCount64();
-         g_showMiddle = !g_showMiddle;
-         UpdateMAButtonLook(BTN_MIDDLE, "中", g_showMiddle, clrLime);
-         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
-         ChartRedraw(0); return;
-      }
-      if(sparam == BTN_LOWER)
-      {
-         g_lastBtnClickTick = GetTickCount64();
-         g_showLower = !g_showLower;
-         UpdateMAButtonLook(BTN_LOWER, "下", g_showLower, clrDeepSkyBlue);
-         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
-         ChartRedraw(0); return;
-      }
-
       if(sparam == "MTF_Rank_BestPair")
       {
          g_lastBtnClickTick = GetTickCount64();
