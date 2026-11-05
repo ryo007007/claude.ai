@@ -974,8 +974,28 @@ void UpdateAndDraw()
             REL_Result rrL;
             EVT_Info   evL;
             ComputeRowImminence(idx, rrL, evL);
+            
             if(ShowImminenceInList && REL_Enable)
-               line += StringFormat("  予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
+              {
+               // ▼ 予兆スコア75%以上なら目立たせる処理
+               if(rrL.pct >= 75.0)
+                 {
+                  // 急変の色と同じにする (方向に応じて上昇色/下落色を適用)
+                  if(rrL.dir > 0)
+                     rowClr = SpikeUpColor;    // 上昇方向ならライム色 (clrLime)
+                  else if(rrL.dir < 0)
+                     rowClr = SpikeDownColor;  // 下落方向ならディープピンク色 (clrDeepPink)
+                  else
+                     rowClr = clrYellow;       // 方向不明の場合は黄色
+
+                  line += StringFormat(" ★予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
+                 }
+               else
+                 {
+                  line += StringFormat("  予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
+                 }
+              }
+              
             if(ShowEventInList)
                line += EventShort(evL);
            }
