@@ -1251,7 +1251,7 @@ void DrawDetailPanel()
    else
      {
       CCOMP_Instance inst = g_scan[idx];
-      color base = clrSilver;
+      color base = clrWhite;
 
       lines[L] = StringFormat("【解説】%s %s   状態: %s   Score %d/8",
                               inst.symbol, tfName, CCOMP_StateText(inst.state), inst.score);
@@ -1351,7 +1351,7 @@ void DrawDetailPanel()
            }
 
          lines[L] = "  TD凡例: S=上昇が続いた疲弊(売り側) B=下落が続いた疲弊(買い側)。圧縮・急変を置き換えるものではなく補助的な確認用";
-         clrs[L]  = clrGray; L++;
+         clrs[L]  = clrWhite; L++;
         }
 
       if(WLF_Enable && g_wlf[idx].ready)
@@ -1360,7 +1360,7 @@ void DrawDetailPanel()
          if(!w.found)
            {
             lines[L] = "  ウォルフ波動: 該当なし(直近でポイント5まで揃ったパターンはありません)";
-            clrs[L]  = clrGray; L++;
+            clrs[L]  = clrWhite; L++;
            }
          else
            {
