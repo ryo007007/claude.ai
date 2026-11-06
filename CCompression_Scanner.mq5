@@ -24,6 +24,7 @@
 #include "MarketEngines/WolfeWaveEngine.mqh"        // ウォルフ波動エンジン
 #include "MarketEngines/IchimokuEngine.mqh"          // 一目均衡表エンジン
 #include "MarketEngines/WickDetector.mqh"        // 髭検知エンジン（追加）
+#include "MarketEngines/HarmonicPatternEngine.mqh" // ハーモニックパターンエンジン（追加）
 
 //---------------- 入力パラメータ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
@@ -133,6 +134,10 @@ datetime        g_wlfBar[];
 ICH_Result      g_ich[];
 datetime        g_ichBar[];
 
+//--- ハーモニックパターンの結果(g_scanと同じ添字)と、最後に計算した確定足の時刻
+HARM_Result     g_harm[];
+datetime        g_harmBar[];
+
 //--- 髭検知用
 ENUM_TIMEFRAMES g_wickTfList[];
 int             g_wickTfCount = 0;
@@ -159,6 +164,7 @@ void DrawStatsPanel();    // 検証パネル描画(定義はファイル末尾)
 void DrawWickPanel();     // 髭検知パネル描画
 void DrawWickHighlights();// 髭検知足の強調表示描画
 void DrawWolfeChart();    // ウォルフ波動のチャート描画(定義はファイル末尾)
+void DrawHarmonicChart(); // ハーモニックパターンのチャート描画(追加)
 
 //+------------------------------------------------------------------+
 int ParseSymbols(string src, string &outArr[])
@@ -329,6 +335,8 @@ int OnInit()
    ArrayResize(g_wlfBar, g_scanTotal);
    ArrayResize(g_ich,    g_scanTotal);
    ArrayResize(g_ichBar, g_scanTotal);
+   ArrayResize(g_harm,   g_scanTotal);  // ← 追加
+   ArrayResize(g_harmBar, g_scanTotal); // ← 追加
    ArrayResize(g_baseBar, g_scanTotal);
    for(int tk = 0; tk < g_scanTotal; tk++)
      {
@@ -341,6 +349,9 @@ int OnInit()
       g_ichBar[tk]     = 0;
       g_ich[tk].ready  = false;
       g_baseBar[tk]    = 0;
+      g_harmBar[tk]    = 0;  // ← 追加
+      g_harm[tk].ready = false; // ← 追加
+      g_harm[tk].found = false; // ← 追加
      }
    for(int k = 0; k < g_scanTotal; k++)
      {
@@ -425,6 +436,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "CCOMP_WickHL_");
    g_wlfDrawKey = "x";
    WLF_ClearDrawing();
+   HARM_ClearDrawing(); // ← 追加
    ChartRedraw(0);
   }
 
@@ -486,6 +498,17 @@ void UpdateAndDraw()
          if(!g_scan[i].ready || g_scan[i].lastBarTime == g_ichBar[i]) continue;
          if(ICH_Compute(g_scan[i].symbol, g_scan[i].tf, g_ich[i]))
             g_ichBar[i] = g_scan[i].lastBarTime;
+        }
+     }
+
+   //--- ハーモニックパターン(確定足が更新された行だけ計算する)
+   if(HARM_Enable)
+     {
+      for(int i = 0; i < g_scanTotal; i++)
+        {
+         if(!g_scan[i].ready || g_scan[i].lastBarTime == g_harmBar[i]) continue;
+         if(HARM_Compute(g_scan[i].symbol, g_scan[i].tf, g_harm[i]))
+            g_harmBar[i] = g_scan[i].lastBarTime;
         }
      }
 
@@ -1000,19 +1023,48 @@ void UpdateAndDraw()
                line += EventShort(evL);
            }
 
+         // 1. TD（TDシーケンシャル）
          if(TDS_Enable && TDS_ShowInList && g_td[idx].ready)
            {
-            line += TDS_Text(g_td[idx]);
+            string tdDir = "";
+            if(g_td[idx].recentDir > 0)      tdDir = "↑";
+            else if(g_td[idx].recentDir < 0) tdDir = "↓";
+            
+            line += StringFormat("[TD %s]", tdDir);
             if(inst.state == CCOMP_TRANSITION && g_td[idx].recent)
-               line += " ★TD重複";
+               line += StringFormat(" ★TD重複%s", tdDir);
            }
+
+         // 2. WLF（ウォルフ波動）
          if(WLF_Enable && WLF_ShowInList)
-            line += WLF_Text(g_wlf[idx]);
+           {
+            string wlfDir = "";
+            if(g_wlf[idx].dir > 0)      wlfDir = "↑";
+            else if(g_wlf[idx].dir < 0) wlfDir = "↓";
+            
+            line += StringFormat("[WLF %s]", wlfDir);
+           }
+
+         // 3. ICH（一目均衡表）
          if(ICH_Enable && ICH_ShowInList)
            {
-            line += ICH_Text(g_ich[idx]);
+            string ichDir = "";
+            if(g_ich[idx].relDir > 0)      ichDir = "↑";
+            else if(g_ich[idx].relDir < 0) ichDir = "↓";
+            
+            line += StringFormat("[一目 %s]", ichDir);
             if(inst.state == CCOMP_TRANSITION && ICH_HasRelease(g_ich[idx]))
-               line += " ★一目の解除方向あり";
+               line += StringFormat(" ★一目解除%s", ichDir);
+           }
+
+         // 4. HARM（ハーモニックパターン）
+         if(HARM_Enable && HARM_ShowInList && g_harm[idx].found)
+           {
+            string harmDir = "";
+            if(g_harm[idx].direction > 0)      harmDir = "↑";
+            else if(g_harm[idx].direction < 0) harmDir = "↓";
+            
+            line += StringFormat("[%s %s]", g_harm[idx].patternName, harmDir);
            }
         }
 
@@ -1045,6 +1097,7 @@ void UpdateAndDraw()
 
    DrawDetailPanel();
    DrawWolfeChart();
+   DrawHarmonicChart(); // ← 追加
    DrawStatsPanel();
    DrawWickPanel();
    DrawWickHighlights();
@@ -1246,8 +1299,8 @@ void DrawDetailPanel()
       return;
      }
 
-   string lines[30];
-   color  clrs[30];
+   string lines[35];
+   color  clrs[35];
    int    L = 0;
 
    ENUM_TIMEFRAMES curTF = (ENUM_TIMEFRAMES)_Period;
@@ -1345,9 +1398,14 @@ void DrawDetailPanel()
          clrs[L]  = base; L++;
         }
 
+      // TD（TDシーケンシャル）
       if(TDS_Enable && g_td[idx].ready)
         {
          TDS_Result td = g_td[idx];
+         string tdDir = "";
+         if(td.recentDir > 0)      tdDir = "↑";
+         else if(td.recentDir < 0) tdDir = "↓";
+         
          string setupTxt = (td.setupCount > 0) ? StringFormat("%s %d/9", TDS_DirChar(td.setupDir), td.setupCount) : "なし";
          string cdTxt    = (td.cdCount > 0)    ? StringFormat("%s %d/13", TDS_DirChar(td.cdDir), td.cdCount) : "なし";
          string done = "";
@@ -1360,7 +1418,7 @@ void DrawDetailPanel()
            }
          if(StringLen(done) == 0) done = "なし";
 
-         lines[L] = StringFormat("  TD: セットアップ進行 %s / カウントダウン進行 %s / 直近の完了: %s", setupTxt, cdTxt, done);
+         lines[L] = StringFormat("  [TD %s]: セットアップ進行 %s / カウントダウン進行 %s / 直近の完了: %s", tdDir, setupTxt, cdTxt, done);
          clrs[L]  = base; L++;
 
          if(inst.state == CCOMP_TRANSITION && td.recent)
@@ -1374,12 +1432,17 @@ void DrawDetailPanel()
          clrs[L]  = clrWhite; L++;
         }
 
+      // WLF（ウォルフ波動）
       if(WLF_Enable && g_wlf[idx].ready)
         {
          WLF_Result w = g_wlf[idx];
+         string wlfDir = "";
+         if(w.dir > 0)      wlfDir = "↑";
+         else if(w.dir < 0) wlfDir = "↓";
+         
          if(!w.found)
            {
-            lines[L] = "  ウォルフ波動: 該当なし(直近でポイント5まで揃ったパターンはありません)";
+            lines[L] = StringFormat("  [Wolfe波動 %s]: 該当なし(直近でポイント5まで揃ったパターンはありません)", wlfDir);
             clrs[L]  = clrWhite; L++;
            }
          else
@@ -1388,7 +1451,7 @@ void DrawDetailPanel()
             bool rev  = (w.pinBar || w.engulf);
             string revTxt = w.pinBar ? "ピンバー" : (w.engulf ? "包み足" : "なし");
 
-            lines[L] = StringFormat("  ウォルフ波動: %s %s   P1=%s P2=%s P3=%s P4=%s P5=%s",
+            lines[L] = StringFormat("  [Wolfe波動 %s]: %s %s   P1=%s P2=%s P3=%s P4=%s P5=%s", wlfDir,
                                     w.dir > 0 ? "強気(買い)" : "弱気(売り)", w.state == 2 ? "ポイント5確定" : "ポイント5候補",
                                     DoubleToString(w.p1, w.digits), DoubleToString(w.p2, w.digits),
                                     DoubleToString(w.p3, w.digits), DoubleToString(w.p4, w.digits),
@@ -1415,12 +1478,17 @@ void DrawDetailPanel()
            }
         }
 
+      // ICH（一目均衡表）
       if(ICH_Enable && g_ich[idx].ready)
         {
          ICH_Result ic = g_ich[idx];
+         string ichDir = "";
+         if(ic.relDir > 0)      ichDir = "↑";
+         else if(ic.relDir < 0) ichDir = "↓";
+         
          string posTxt = (ic.pos > 0) ? "雲の上" : ((ic.pos < 0) ? "雲の下" : "雲の中");
-         lines[L] = StringFormat("  一目均衡表: 価格は%s  雲の厚み%.2f%%(過去%d本中 下位%.0f%%)%s  基準線%s  転換線-基準線 %.1fATR  一目の圧縮度 %d/4",
-                                 posTxt, ic.thickPct, ICH_PctBars, ic.thickPctile, ic.thin ? "=薄い" : "",
+         lines[L] = StringFormat("  [一目均衡表 %s]: 価格は%s  雲の厚み%.2f%%(過去%d本中 下位%.0f%%)%s  基準線%s  転換線-基準線 %.1fATR  一目の圧縮度 %d/4",
+                                 ichDir, posTxt, ic.thickPct, ICH_PctBars, ic.thickPctile, ic.thin ? "=薄い" : "",
                                  ic.kijunFlat ? "は横ばい" : "は傾き有り", ic.tkDistATR, ic.score);
          clrs[L]  = base; L++;
 
@@ -1446,6 +1514,28 @@ void DrawDetailPanel()
            {
             lines[L] = "  判定: 一目均衡表も圧縮を示しています(薄い雲の中に価格がある)";
             clrs[L]  = base; L++;
+           }
+        }
+
+      // HARM（ハーモニックパターン）
+      if(HARM_Enable && g_harm[idx].ready)
+        {
+         HARM_Result hm = g_harm[idx];
+         string harmDir = "";
+         if(hm.direction > 0)      harmDir = "↑";
+         else if(hm.direction < 0) harmDir = "↓";
+
+         if(!hm.found)
+           {
+            lines[L] = StringFormat("  [ハーモニック %s]: 該当なし(条件を満たすパターンは未検出)", harmDir);
+            clrs[L]  = clrWhite; L++;
+           }
+         else
+           {
+            lines[L] = StringFormat("  [ハーモニック %s]: %s %s   PRZ=%.5f (X=%.5f, A=%.5f, B=%.5f, C=%.5f, D=%.5f)",
+                                    hm.patternName, harmDir, hm.direction > 0 ? "強気(買い)" : "弱気(売り)",
+                                    hm.PRZ, hm.X, hm.A, hm.B, hm.C, hm.D);
+            clrs[L]  = (hm.direction > 0) ? clrLime : clrDeepPink; L++;
            }
         }
 
@@ -1571,6 +1661,27 @@ void DrawWolfeChart()
       return;
      }
    WLF_DrawPattern(g_wlf[idx]);
+  }
+
+//+------------------------------------------------------------------+
+void DrawHarmonicChart()
+  {
+   if(!HARM_Enable || !HARM_DrawOnChart)
+     {
+      HARM_ClearDrawing();
+      return;
+     }
+   ENUM_TIMEFRAMES curTF = (ENUM_TIMEFRAMES)_Period;
+   int idx = -1;
+   for(int i = 0; i < g_scanTotal; i++)
+      if(g_scan[i].symbol == _Symbol && g_scan[i].tf == curTF) { idx = i; break; }
+
+   if(idx < 0 || !g_harm[idx].ready || !g_harm[idx].found)
+     {
+      HARM_ClearDrawing();
+      return;
+     }
+   HARM_DrawPattern(g_harm[idx]);
   }
 
 //+------------------------------------------------------------------+
