@@ -57,9 +57,9 @@ input bool SortByImminence     = false;  // trueなら、圧縮表示を予兆�
 
 input group "=== 解説パネル(現在のチャートの通貨・時間足) ==="
 input bool ShowDetailPanel = true;               // 解説パネルを表示する
-input ENUM_BASE_CORNER DetailCorner = CORNER_LEFT_LOWER; // 表示する隅
-input int  DetailX         = 500;                // 隅からのX距離
-input int  DetailY         = 20;                 // 隅からのY距離
+input ENUM_BASE_CORNER DetailCorner = CORNER_LEFT_LOWER; // 表示する隅（左下隅基準）
+input int  DetailX         = 350;                // 左から350ピクセルの位置
+input int  DetailY         = 20;                 // 下から20ピクセルの位置
 
 input group "=== 表示する最低状態 ==="
 input bool ShowCompression       = true; // COMPRESSION以上を表示
