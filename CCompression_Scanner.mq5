@@ -1385,16 +1385,18 @@ void DrawDetailPanel()
          clrs[L]  = base; L++;
         }
 
-      // TD（TDシーケンシャル）
+      // --- 1. TD（TDシーケンシャル）---
       if(TDS_Enable && g_td[idx].ready)
         {
          TDS_Result td = g_td[idx];
          string tdDir = "";
-         if(td.recentDir > 0)      tdDir = "↑";
-         else if(td.recentDir < 0) tdDir = "↓";
+         string tdDirText = "";
+         if(td.recentDir > 0)      { tdDir = "↑"; tdDirText = "売りシグナル点灯中"; }
+         else if(td.recentDir < 0) { tdDir = "↓"; tdDirText = "買いシグナル点灯中"; }
+         else                      { tdDir = "-"; tdDirText = "シグナルなし"; }
          
-         string setupTxt = (td.setupCount > 0) ? StringFormat("%s %d/9", TDS_DirChar(td.setupDir), td.setupCount) : "なし";
-         string cdTxt    = (td.cdCount > 0)    ? StringFormat("%s %d/13", TDS_DirChar(td.cdDir), td.cdCount) : "なし";
+         string setupTxt = (td.setupCount > 0) ? StringFormat("%s%d/9", TDS_DirChar(td.setupDir), td.setupCount) : "なし";
+         string cdTxt    = (td.cdCount > 0)    ? StringFormat("%s%d/13", TDS_DirChar(td.cdDir), td.cdCount) : "なし";
          string done = "";
          if(td.lastSetupAgo >= 0)
             done += StringFormat("%s9%s %d本前", TDS_DirChar(td.lastSetupDir), td.lastPerfect ? "(パーフェクト)" : "", td.lastSetupAgo);
@@ -1405,124 +1407,152 @@ void DrawDetailPanel()
            }
          if(StringLen(done) == 0) done = "なし";
 
-         lines[L] = StringFormat("  [TD %s]: セットアップ進行 %s / カウントダウン進行 %s / 直近の完了: %s", tdDir, setupTxt, cdTxt, done);
+         // 1行目：結論と基本状態
+         lines[L] = StringFormat("  [TD %s]: %s (セットアップ%s, カウントダウン%s)", tdDir, tdDirText, setupTxt, cdTxt);
          clrs[L]  = (TDS_Enable && g_td[idx].ready) ? clrYellow : clrWhite; L++;
+         
+         // 2行目：詳細状況
+         lines[L] = StringFormat("  ・直近の完了：%s", done);
+         clrs[L]  = clrWhite; L++;
 
+         // 3行目：判定
          if(inst.state == CCOMP_TRANSITION && td.recent)
            {
-            lines[L] = StringFormat("  判定: 圧縮解除 + 直近にTD完了(%s%d, %d本前)  → 圧縮解除がトレンド疲弊の直後に起きています",
-                                    TDS_DirChar(td.recentDir), td.recentKind, td.recentAgo);
+            lines[L] = "  判定：圧縮解除とTDのトレンド疲弊シグナルが一致。反転の信頼度が高い状態です。";
             clrs[L]  = clrAqua; L++;
            }
-
-         lines[L] = "  TD凡例: S=上昇が続いた疲弊(売り側) B=下落が続いた疲弊(買い側)。圧縮・急変を置き換えるものではなく補助的な確認用";
-         clrs[L]  = clrWhite; L++;
+         else
+           {
+            lines[L] = "  判定：トレンドの疲弊を示唆。押し目買い/戻り売りのタイミングを窺っています。";
+            clrs[L]  = clrWhite; L++;
+           }
         }
 
-      // WLF（ウォルフ波動）
+      // --- 2. WLF（ウォルフ波動）---
       if(WLF_Enable && g_wlf[idx].ready)
         {
          WLF_Result w = g_wlf[idx];
          string wlfDir = "";
-         if(w.dir > 0)      wlfDir = "↑";
-         else if(w.dir < 0) wlfDir = "↓";
+         string wlfDirText = "";
+         if(w.dir > 0)      { wlfDir = "↑"; wlfDirText = "買いシグナル"; }
+         else if(w.dir < 0) { wlfDir = "↓"; wlfDirText = "売りシグナル"; }
+         else               { wlfDir = "-"; wlfDirText = "シグナルなし"; }
          
          if(!w.found)
            {
-            lines[L] = StringFormat("  [Wolfe波動 %s]: 該当なし(直近でポイント5まで揃ったパターンはありません)", wlfDir);
+            lines[L] = StringFormat("  [Wolfe波動 %s]: %s (直近でポイント5まで揃ったパターンはありません)", wlfDir, wlfDirText);
             clrs[L]  = clrWhite; L++;
            }
          else
            {
             bool tdAl = (TDS_Enable && g_td[idx].ready && g_td[idx].recent && g_td[idx].recentDir == -w.dir);
             bool rev  = (w.pinBar || w.engulf);
-            string revTxt = w.pinBar ? "ピンバー" : (w.engulf ? "包み足" : "なし");
+            string stateTxt = (w.state == 2) ? "ポイント5確定" : "ポイント5候補";
 
-            lines[L] = StringFormat("  [Wolfe波動 %s]: %s %s   P1=%s P2=%s P3=%s P4=%s P5=%s", wlfDir,
-                                    w.dir > 0 ? "強気(買い)" : "弱気(売り)", w.state == 2 ? "ポイント5確定" : "ポイント5候補",
-                                    DoubleToString(w.p1, w.digits), DoubleToString(w.p2, w.digits),
-                                    DoubleToString(w.p3, w.digits), DoubleToString(w.p4, w.digits),
-                                    DoubleToString(w.p5, w.digits));
+            // 1行目：結論と基本状態
+            lines[L] = StringFormat("  [Wolfe波動 %s]: %s (%s)", wlfDir, wlfDirText, stateTxt);
             clrs[L]  = (WLF_Enable && g_wlf[idx].ready && w.found) ? clrYellow : clrWhite; L++;
 
-            lines[L] = StringFormat("  目標EPA %s  ETA %s  値幅%.1fATR / リスク%.1fATR (RR %.1f)  行き過ぎ%.1fATR  反転足: %s",
-                                    DoubleToString(w.epa, w.digits),
-                                    (w.etaBars > 0) ? StringFormat("%d本後", w.etaBars) : "経過",
-                                    w.rewardATR, w.riskATR, w.rr, w.overshootATR, revTxt);
-            clrs[L]  = base; L++;
+            // 2行目：詳細状況
+            lines[L] = StringFormat("  ・ターゲット(EPA): %s (RR %.1f)  ・反転足: %s", 
+                                    DoubleToString(w.epa, w.digits), w.rr, 
+                                    (rev ? (w.pinBar ? "ピンバーあり" : "包み足あり") : "なし"));
+            clrs[L]  = clrWhite; L++;
 
-            string judge;
+            // 3行目：判定
+            string judge = "";
             if(w.state != 2)
-               judge = "ポイント5候補です。終値が1-3ラインの内側へ戻って足が確定するのを待ちます";
+               judge = "ポイント5候補です。終値が1-3ラインの内側へ戻って足が確定するのを待ちます。";
             else if(tdAl && rev)
-               judge = "ウォルフP5確定 + TD完了 + 反転足 → 3条件が揃っています";
+               judge = "ウォルフP5確定 + TD完了 + 反転足 → 3条件が揃った強力なシグナルです。";
             else if(tdAl)
-               judge = "ウォルフP5確定 + TD完了(反転足はまだ)";
+               judge = "ウォルフP5確定 + TD完了。反転足の確認を待ってエントリー検討。";
             else
-               judge = "ウォルフP5確定のみ(TD完了は重なっていません)";
-            lines[L] = "  判定: " + judge;
-            clrs[L]  = (w.state == 2 && tdAl) ? clrAqua : base; L++;
+               judge = "ウォルフP5確定のみ。ターゲットへの上昇/下落を期待します。";
+            lines[L] = StringFormat("  判定：%s", judge);
+            clrs[L]  = (w.state == 2 && tdAl) ? clrAqua : clrWhite; L++;
            }
         }
 
-      // ICH（一目均衡表）
+      // --- 3. ICH（一目均衡表）---
       if(ICH_Enable && g_ich[idx].ready)
         {
          ICH_Result ic = g_ich[idx];
          string ichDir = "";
-         if(ic.relDir > 0)      ichDir = "↑";
-         else if(ic.relDir < 0) ichDir = "↓";
+         string ichDirText = "";
+         if(ic.relDir > 0)      { ichDir = "↑"; ichDirText = "買い優位"; }
+         else if(ic.relDir < 0) { ichDir = "↓"; ichDirText = "売り優位"; }
+         else                   { ichDir = "-"; ichDirText = "方向感なし"; }
          
          string posTxt = (ic.pos > 0) ? "雲の上" : ((ic.pos < 0) ? "雲の下" : "雲の中");
-         lines[L] = StringFormat("  [一目均衡表 %s]: 価格は%s  雲の厚み%.2f%%(過去%d本中 下位%.0f%%)%s  基準線%s  転換線-基準線 %.1fATR  一目の圧縮度 %d/4",
-                                 ichDir, posTxt, ic.thickPct, ICH_PctBars, ic.thickPctile, ic.thin ? "=薄い" : "",
-                                 ic.kijunFlat ? "は横ばい" : "は傾き有り", ic.tkDistATR, ic.score);
+         int roles = (ic.relDir > 0 ? ic.bullRoles : ic.bearRoles);
+         string trendDir = (ic.relDir > 0 ? "買い" : "売り");
+         
+         // 1行目：結論と基本状態
+         lines[L] = StringFormat("  [一目均衡表 %s]: %s (三役のうち%dつが%s方向)", 
+                                 ichDir, ichDirText, roles, trendDir);
          clrs[L]  = (ICH_Enable && g_ich[idx].ready) ? clrYellow : clrWhite; L++;
+         
+         // 2行目：詳細状況
+         lines[L] = StringFormat("  ・価格：%s  ・転換線：基準線を%sに抜けています  ・遅行スパン：%s", 
+                                 posTxt, 
+                                 (ic.relKind > 0 ? "上" : (ic.relKind < 0 ? "下" : "交差中")),
+                                 (ic.chikou > 0 ? "26本前の価格より上" : (ic.chikou < 0 ? "26本前の価格より下" : "価格と同等")));
+         clrs[L]  = clrWhite; L++;
 
-         lines[L] = StringFormat("  三役: 好転%d/3 逆転%d/3  遅行スパン:%s  先行スパンのねじれ(26本先まで):%s",
-                                 ic.bullRoles, ic.bearRoles,
-                                 ic.chikou > 0 ? "26本前の価格より上" : (ic.chikou < 0 ? "26本前の価格より下" : "同じ"),
-                                 ic.twistAhead ? "あり" : "なし");
-         clrs[L]  = base; L++;
-
-         if(ic.relKind != 0)
-           {
-            lines[L] = StringFormat("  解除の方向: %s(%d本前)  ※三役が%d以上その方向に揃っているものだけを数えています",
-                                    ICH_RelText(ic), ic.relAgo, ICH_MinRoles);
-            clrs[L]  = (ic.relDir > 0) ? WLF_ColorBuy : WLF_ColorSell; L++;
-           }
-
+         // 3行目：判定
          if(inst.state == CCOMP_TRANSITION && ic.relKind != 0)
            {
-            lines[L] = "  判定: 圧縮解除(TRANSITION) + 一目の解除方向 → 解除の方向の裏づけがあります";
+            lines[L] = StringFormat("  判定：圧縮解除と一目の%sサインが一致。%s方向へのブレイクアウト期待大。", 
+                                    trendDir, (ic.relDir > 0 ? "上" : "下"));
             clrs[L]  = clrAqua; L++;
            }
          else if(inst.state != CCOMP_NORMAL && ic.thin && ic.pos == 0)
            {
-            lines[L] = "  判定: 一目均衡表も圧縮を示しています(薄い雲の中に価格がある)";
-            clrs[L]  = base; L++;
+            lines[L] = "  判定：一目均衡表も圧縮を示しています（薄い雲の中に価格があるため、様子見推奨）";
+            clrs[L]  = clrYellow; L++;
+           }
+         else
+           {
+            lines[L] = StringFormat("  判定：現在は%s方向を支持していますが、完全な三役揃いではないため注意深く見守ります。", trendDir);
+            clrs[L]  = clrWhite; L++;
            }
         }
 
-      // HARM（ハーモニックパターン）
+      // --- 4. HARM（ハーモニックパターン）---
       if(HARM_Enable && g_harm[idx].ready)
         {
          HARM_Result hm = g_harm[idx];
          string harmDir = "";
-         if(hm.direction > 0)      harmDir = "↑";
-         else if(hm.direction < 0) harmDir = "↓";
+         string harmDirText = "";
+         if(hm.direction > 0)      { harmDir = "↑"; harmDirText = "買いシグナル"; }
+         else if(hm.direction < 0) { harmDir = "↓"; harmDirText = "売りシグナル"; }
+         else                      { harmDir = "-"; harmDirText = "シグナルなし"; }
 
          if(!hm.found)
            {
-            lines[L] = StringFormat("  [ハーモニック %s]: 該当なし(条件を満たすパターンは未検出)", harmDir);
+            lines[L] = StringFormat("  [ハーモニック %s]: %s (条件を満たすパターンは未検出)", harmDir, harmDirText);
             clrs[L]  = clrWhite; L++;
            }
          else
            {
-            lines[L] = StringFormat("  [ハーモニック %s]: %s %s   PRZ=%.5f (X=%.5f, A=%.5f, B=%.5f, C=%.5f, D=%.5f)",
-                                    hm.patternName, harmDir, hm.direction > 0 ? "強気(買い)" : "弱気(売り)",
-                                    hm.PRZ, hm.X, hm.A, hm.B, hm.C, hm.D);
+            // 1行目：結論と基本状態
+            lines[L] = StringFormat("  [ハーモニック %s]: %s (%sパターン)", harmDir, harmDirText, hm.patternName);
             clrs[L]  = (HARM_Enable && g_harm[idx].ready && hm.found) ? clrYellow : clrWhite; L++;
+            
+            // 2行目：詳細状況
+            lines[L] = StringFormat("  ・完了点(PRZ): %s  ・X=%.5f, A=%.5f, B=%.5f, C=%.5f, D=%.5f", 
+                                    DoubleToString(hm.PRZ, _Digits), hm.X, hm.A, hm.B, hm.C, hm.D);
+            clrs[L]  = clrWhite; L++;
+
+            // 3行目：判定
+            string judge = "";
+            if(hm.direction > 0)
+               judge = "PRZ付近での買い反転を期待します。損切りはX安値の下に設定してください。";
+            else
+               judge = "PRZ付近での売り反転を期待します。損切りはX高値の上に設定してください。";
+            lines[L] = StringFormat("  判定：%s", judge);
+            clrs[L]  = clrAqua; L++;
            }
         }
 

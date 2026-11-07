@@ -1,31 +1,31 @@
 //+------------------------------------------------------------------+
-//|                                        RelatedPairEngine.mqh      |
-//|  関連通貨エンジン(予兆スコア)                                     |
+//|                                     RelatedPairEngine.mqh      |
+//|  関連通貨エンジン(予兆スコア)                                    |
 //|                                                                    |
 //|  「関連する通貨ペアが急変・圧縮している時は、この通貨ペアも          |
-//|   まもなく動きやすい」という考え方を、予兆スコア(%)にする。         |
+//|   まもなく動きやすい」という考え方を、予兆スコア(%)にする。        |
 //|                                                                    |
 //|  1. 関連ペアの決め方: 同じ時間足の値動き(騰落率)の相関係数を計算し、  |
-//|     |相関係数| が REL_MinCorr 以上のペアを「関連あり」とする。      |
+//|     |相関係数| が REL_MinCorr 以上のペアを「関連あり」とする。     |
 //|     (符号は問わない。逆相関も関連として扱い、方向の目安に使う)     |
 //|  2. 予兆スコア = 次の4要素の重みづけ平均(0〜100%)                  |
-//|       自身の圧縮度 / 関連ペアの圧縮度 / 関連ペアの急変 / 指標・開場  |
+//|        自身の圧縮度 / 関連ペアの圧縮度 / 関連ペアの急変 / 指標・開場  |
 //|                                                                    |
-//|  【重要】これは確率ではなく、重みづけした「目安」。                  |
+//|  【重要】これは確率ではなく、重みづけした「目安」。                |
 //|  実際の的中率とは一致しない。検証ログ(SignalLogger)に予兆スコアを  |
-//|  記録し、スコア帯ごとの的中率を見て重みを調整していく前提の設計。   |
+//|  記録し、スコア帯ごとの的中率を見て重みを調整していく前提の設計。    |
 //+------------------------------------------------------------------+
 #property strict
 
 input group "=== 関連通貨エンジン(予兆スコア) ==="
-input bool   REL_Enable    = true;  // 予兆スコアを計算する
-input int    REL_CorrBars  = 100;   // 相関係数の計算に使う本数
-input double REL_MinCorr   = 0.5;   // 「関連あり」とみなす|相関係数|の下限
-input int    REL_RefreshMin = 30;   // 相関係数の再計算間隔(分)
-input double REL_WSelf     = 0.35;  // 重み: 自身の圧縮度
-input double REL_WRelComp  = 0.20;  // 重み: 関連ペアの圧縮度
-input double REL_WRelSpike = 0.30;  // 重み: 関連ペアの急変
-input double REL_WEvent    = 0.15;  // 重み: 指標発表・市場開場の近さ
+input bool    REL_Enable     = true;  // 予兆スコアを計算する
+input int     REL_CorrBars   = 100;   // 相関係数の計算に使う本数
+input double  REL_MinCorr    = 0.5;   // 「関連あり」とみなす|相関係数|の下限
+input int     REL_RefreshMin = 30;   // 相関係数の再計算間隔(分)
+input double  REL_WSelf      = 0.35;  // 重み: 自身の圧縮度
+input double  REL_WRelComp   = 0.20;  // 重み: 関連ペアの圧縮度
+input double  REL_WRelSpike  = 0.30;  // 重み: 関連ペアの急変
+input double  REL_WEvent     = 0.15;  // 重み: 指標発表・市場開場の近さ
 
 string          g_relSyms[];
 ENUM_TIMEFRAMES g_relTfs[];
@@ -203,12 +203,12 @@ double REL_GetCorr(const int tfIdx, const int i, const int j)
   }
 
 //+------------------------------------------------------------------+
-//| 予兆スコアを計算する                                               |
-//|  symIdx/tfIdx : 対象の銘柄・時間足(Initに渡した並びでの番号)      |
-//|  score[]      : 各銘柄の圧縮Score。添字は tfIdx*n + 銘柄番号       |
-//|  act[] / up[] : 各銘柄が急変中か / 上昇方向か(添字は同じ)          |
-//|  selfScore    : 対象自身の圧縮Score(0〜8)                         |
-//|  eventScore   : 指標・開場の近さ(0〜1。EventTimeEngineから)        |
+//| 予兆スコアを計算する                                             |
+//|   symIdx/tfIdx : 対象の銘柄・時間足(Initに渡した並びでの番号)      |
+//|   score[]      : 各銘柄の圧縮Score。添字は tfIdx*n + 銘柄番号      |
+//|   act[] / up[] : 各銘柄が急変中か / 上昇方向か(添字は同じ)          |
+//|   selfScore    : 対象自身の圧縮Score(0〜8)                       |
+//|   eventScore   : 指標・開場の近さ(0〜1。EventTimeEngineから)      |
 //+------------------------------------------------------------------+
 void REL_Compute(const int symIdx, const int tfIdx,
                  const int &score[], const bool &act[], const bool &up[],
@@ -250,7 +250,7 @@ void REL_Compute(const int symIdx, const int tfIdx,
       if(score[off + j] >= 5 && w > bestCompW)
         {
          bestCompW = w;
-         res.topComp = StringFormat("%s(r=%+.2f)", g_relSyms[j], r);
+         res.topComp = StringFormat("%s(相関:%+.2f)", g_relSyms[j], r); // ← 修正箇所1
         }
 
       // 急変中の関連ペア
@@ -262,7 +262,7 @@ void REL_Compute(const int symIdx, const int tfIdx,
          if(w > bestSpikeW)
            {
             bestSpikeW = w;
-            res.topSpike = StringFormat("%s(r=%+.2f)", g_relSyms[j], r);
+            res.topSpike = StringFormat("%s(相関:%+.2f)", g_relSyms[j], r); // ← 修正箇所2
            }
         }
      }
@@ -274,9 +274,9 @@ void REL_Compute(const int symIdx, const int tfIdx,
    double wTot = REL_WSelf + REL_WRelComp + REL_WRelSpike + REL_WEvent;
    if(wTot <= 0.0) wTot = 1.0;
    res.pct = 100.0 * (REL_WSelf * res.compSelf + REL_WRelComp * res.compRel
-                      + REL_WRelSpike * res.spikeRel + REL_WEvent * res.event) / wTot;
+                     + REL_WRelSpike * res.spikeRel + REL_WEvent * res.event) / wTot;
 
-   if(dirSum > 0.3)       res.dir = 1;
+   if(dirSum > 0.3)        res.dir = 1;
    else if(dirSum < -0.3) res.dir = -1;
   }
 //+------------------------------------------------------------------+
