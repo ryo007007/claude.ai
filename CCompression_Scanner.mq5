@@ -215,16 +215,6 @@ void ComputeRowImminence(const int idx, REL_Result &rr, EVT_Info &ev)
    REL_Compute(si, ti, g_immScore, g_immAct, g_immUp, g_scan[idx].score, ev.score, rr);
   }
 
-//--- 一覧用の短い指標・開場表示
-string EventShort(const EVT_Info &ev)
-  {
-   if(ev.minToNext >= 0 && ev.minToNext <= 360)
-      return StringFormat("  [%s指標 %d分後]", ev.nextCur, ev.minToNext);
-   if(ev.minToSession >= 0 && ev.minToSession <= 120)
-      return StringFormat("  [%s開場 %d分後]", ev.sessionName, ev.minToSession);
-   return "";
-  }
-
 string GVKey(const int i, const string field)
   {
    return "CCOMP_" + field + "_" + g_scan[i].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[i].tf));
@@ -1018,9 +1008,6 @@ void UpdateAndDraw()
                   line += StringFormat("  予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
                  }
               }
-              
-            if(ShowEventInList)
-               line += EventShort(evL);
            }
 
          // 1. TD（TDシーケンシャル）
@@ -1419,7 +1406,7 @@ void DrawDetailPanel()
          if(StringLen(done) == 0) done = "なし";
 
          lines[L] = StringFormat("  [TD %s]: セットアップ進行 %s / カウントダウン進行 %s / 直近の完了: %s", tdDir, setupTxt, cdTxt, done);
-         clrs[L]  = base; L++;
+         clrs[L]  = (TDS_Enable && g_td[idx].ready) ? clrYellow : clrWhite; L++;
 
          if(inst.state == CCOMP_TRANSITION && td.recent)
            {
@@ -1456,7 +1443,7 @@ void DrawDetailPanel()
                                     DoubleToString(w.p1, w.digits), DoubleToString(w.p2, w.digits),
                                     DoubleToString(w.p3, w.digits), DoubleToString(w.p4, w.digits),
                                     DoubleToString(w.p5, w.digits));
-            clrs[L]  = (w.dir > 0) ? WLF_ColorBuy : WLF_ColorSell; L++;
+            clrs[L]  = (WLF_Enable && g_wlf[idx].ready && w.found) ? clrYellow : clrWhite; L++;
 
             lines[L] = StringFormat("  目標EPA %s  ETA %s  値幅%.1fATR / リスク%.1fATR (RR %.1f)  行き過ぎ%.1fATR  反転足: %s",
                                     DoubleToString(w.epa, w.digits),
@@ -1490,7 +1477,7 @@ void DrawDetailPanel()
          lines[L] = StringFormat("  [一目均衡表 %s]: 価格は%s  雲の厚み%.2f%%(過去%d本中 下位%.0f%%)%s  基準線%s  転換線-基準線 %.1fATR  一目の圧縮度 %d/4",
                                  ichDir, posTxt, ic.thickPct, ICH_PctBars, ic.thickPctile, ic.thin ? "=薄い" : "",
                                  ic.kijunFlat ? "は横ばい" : "は傾き有り", ic.tkDistATR, ic.score);
-         clrs[L]  = base; L++;
+         clrs[L]  = (ICH_Enable && g_ich[idx].ready) ? clrYellow : clrWhite; L++;
 
          lines[L] = StringFormat("  三役: 好転%d/3 逆転%d/3  遅行スパン:%s  先行スパンのねじれ(26本先まで):%s",
                                  ic.bullRoles, ic.bearRoles,
@@ -1535,7 +1522,7 @@ void DrawDetailPanel()
             lines[L] = StringFormat("  [ハーモニック %s]: %s %s   PRZ=%.5f (X=%.5f, A=%.5f, B=%.5f, C=%.5f, D=%.5f)",
                                     hm.patternName, harmDir, hm.direction > 0 ? "強気(買い)" : "弱気(売り)",
                                     hm.PRZ, hm.X, hm.A, hm.B, hm.C, hm.D);
-            clrs[L]  = (hm.direction > 0) ? clrLime : clrDeepPink; L++;
+            clrs[L]  = (HARM_Enable && g_harm[idx].ready && hm.found) ? clrYellow : clrWhite; L++;
            }
         }
 
