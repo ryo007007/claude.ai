@@ -10,7 +10,7 @@
 //|  パネルへの統合を検討する。                                        |
 //+------------------------------------------------------------------+
 #property copyright "CCompression scanner"
-#property version   "1.00"
+#property version   "1.10"
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -67,7 +67,7 @@ input bool ShowOnlyStrongOrAbove = false; // trueならSTRONG COMPRESSION以上�
 input bool ShowTransition        = true; // TRANSITION(圧縮解除中)を表示
 
 input group "=== 急変検知との連携 ==="
-input bool UseSpikeOverride  = true;  // 急変を検知したら圧縮表示を解除して「急変」として表示する
+input bool UseSpikeOverride  = true;  // 急変を検知したら圧縮示を解除して「急変」として表示する
 input int  SpikeHoldBars     = 3;     // 急変表示を保持する本数(その時間足の本数)
 input bool SpikeShowAlways   = false; // trueなら圧縮中でない行の急変も表示(falseは圧縮中の行のみ対象)
 input bool UseSpikeV2        = true;  // 精度改善版(V2)の急変判定を使う(falseなら従来のV1)
@@ -81,7 +81,7 @@ input double WickMinRatio     = 0.60;    // 髭割合閾値（0.50=50%, 0.60=60%
 input bool   WickScanM1       = true;    // 1分足も髭検知対象にする（圧縮監視とは独立）
 input int    WickMaxHistory   = 30;      // 髭検知履歴の最大保持件数
 input int    WickLookbackBars = 100;     // 再起動時に遡る足数
-input bool   WickAlertOn      = true;    // 髭検知時にアラートを出す
+input bool   WickAlertOn      = true;    // 髭検知時にラートを出す
 
 input group "=== 髭検知 強調表示 ==="
 input bool   WickHighlightEnable = true;      // 髭検知足をチャート上で強調表示する
@@ -126,7 +126,7 @@ bool            g_immUp[];
 TDS_Result      g_td[];
 datetime        g_tdBar[];
 
-// ウォルフ波動の結果(g_scanと同じ添字)と、最後に計算した確定足の時刻
+// ウォルフ波動の結果(g_scanと同じ添字)と、最後に計算し確定足の時刻
 WLF_Result      g_wlf[];
 datetime        g_wlfBar[];
 
@@ -137,6 +137,7 @@ datetime        g_ichBar[];
 //--- ハーモニックパターンの結果(g_scanと同じ添字)と、最後に計算した確定足の時刻
 HARM_Result     g_harm[];
 datetime        g_harmBar[];
+HARM_DRAW_MODE  g_harmDrawMode = HARM_DRAW_FULL; // 描画モード（ボタンで切替）
 
 //--- 髭検知用
 ENUM_TIMEFRAMES g_wickTfList[];
@@ -159,7 +160,7 @@ bool            g_wickHL_On = true;   // 髭強調表示のON/OFF（ボタンで
 // 基準(対照)を最後に判定した確定足の時刻(g_scanと同じ添字)
 datetime        g_baseBar[];
 
-void DrawDetailPanel();   // 解説パネル描画(定義はファイル末尾)
+void DrawDetailPanel();   // 説パネル描画(定義はファイル末尾)
 void DrawStatsPanel();    // 検証パネル描画(定義はファイル末尾)
 void DrawWickPanel();     // 髭検知パネル描画
 void DrawWickHighlights();// 髭検知足の強調表示描画
@@ -291,7 +292,7 @@ int OnInit()
    g_tfCount = c;
    ArrayResize(g_tfList, c);
    for(int i = 0; i < c; i++) g_tfList[i] = tmp[i];
-   
+
    ArrayResize(g_wickTfList, 7);
    int wc = 0;
    if(ScanD1)  g_wickTfList[wc++] = PERIOD_D1;
@@ -304,7 +305,7 @@ int OnInit()
    g_wickTfCount = wc;
    ArrayResize(g_wickTfList, wc);
    ArrayResize(g_wickHistory, WickMaxHistory);
-   
+
    if(g_symbolCount == 0 || g_tfCount == 0)
      {
       Print("CCompression_Scanner: 監視対象の通貨ペアまたは時間足が0件です");
@@ -325,8 +326,8 @@ int OnInit()
    ArrayResize(g_wlfBar, g_scanTotal);
    ArrayResize(g_ich,    g_scanTotal);
    ArrayResize(g_ichBar, g_scanTotal);
-   ArrayResize(g_harm,   g_scanTotal);  // ← 追加
-   ArrayResize(g_harmBar, g_scanTotal); // ← 追加
+   ArrayResize(g_harm,   g_scanTotal);
+   ArrayResize(g_harmBar, g_scanTotal);
    ArrayResize(g_baseBar, g_scanTotal);
    for(int tk = 0; tk < g_scanTotal; tk++)
      {
@@ -339,9 +340,9 @@ int OnInit()
       g_ichBar[tk]     = 0;
       g_ich[tk].ready  = false;
       g_baseBar[tk]    = 0;
-      g_harmBar[tk]    = 0;  // ← 追加
-      g_harm[tk].ready = false; // ← 追加
-      g_harm[tk].found = false; // ← 追加
+      g_harmBar[tk]    = 0;
+      g_harm[tk].ready = false;
+      g_harm[tk].found = false;
      }
    for(int k = 0; k < g_scanTotal; k++)
      {
@@ -366,9 +367,14 @@ int OnInit()
    g_logOn   = GlobalVariableCheck("CCOMP_UI_LOG")   ? (GlobalVariableGet("CCOMP_UI_LOG")   > 0.5) : SLG_Enable;
    g_statsOn = GlobalVariableCheck("CCOMP_UI_STATS") ? (GlobalVariableGet("CCOMP_UI_STATS") > 0.5) : ShowStatsPanel;
    g_wickHL_On = GlobalVariableCheck("CCOMP_UI_WICKHL") ? (GlobalVariableGet("CCOMP_UI_WICKHL") > 0.5) : true;
+   // ハーモニック描画モードの復元
+   if(GlobalVariableCheck("CCOMP_UI_HARMDRAW"))
+      g_harmDrawMode = (HARM_DRAW_MODE)(int)GlobalVariableGet("CCOMP_UI_HARMDRAW");
+   else
+      g_harmDrawMode = HARM_DRAW_FULL;
    SLG_SetOn(g_logOn);
    LoadSpikeStates();
-   
+
    if(UseWickDetector && WickLookbackBars > 0)
      {
       int tempCount = 0;
@@ -384,12 +390,12 @@ int OnInit()
               {
                string sym = g_symbols[si];
                ENUM_TIMEFRAMES tf = g_wickTfList[ti];
-               
+
                WICK_Info wick;
                if(!WICK_Check(sym, tf, shift, WickRangeMult, WickMinRatio, wick)) continue;
-               
+
                datetime barTime = iTime(sym, tf, shift);
-               
+
                tempHistory[tempCount].symbol    = sym;
                tempHistory[tempCount].tf        = tf;
                tempHistory[tempCount].barTime   = barTime;
@@ -403,7 +409,7 @@ int OnInit()
 
       g_wickHistoryCount = 0;
       ArrayResize(g_wickHistory, WickMaxHistory);
-      
+
       for(int i = tempCount - 1; i >= 0 && g_wickHistoryCount < WickMaxHistory; i--)
         {
          g_wickHistory[g_wickHistoryCount] = tempHistory[i];
@@ -426,7 +432,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "CCOMP_WickHL_");
    g_wlfDrawKey = "x";
    WLF_ClearDrawing();
-   HARM_ClearDrawing(); // ← 追加
+   HARM_ClearDrawing();
    ChartRedraw(0);
   }
 
@@ -773,12 +779,12 @@ void UpdateAndDraw()
            {
             string sym = g_symbols[si];
             ENUM_TIMEFRAMES tf = g_wickTfList[ti];
-            
+
             WICK_Info wick;
             if(!WICK_Check(sym, tf, 1, WickRangeMult, WickMinRatio, wick)) continue;
-            
+
             datetime barTime = iTime(sym, tf, 1);
-            
+
             bool duplicate = false;
             for(int h = 0; h < g_wickHistoryCount; h++)
               {
@@ -791,7 +797,7 @@ void UpdateAndDraw()
                  }
               }
             if(duplicate) continue;
-            
+
             if(g_wickHistoryCount >= WickMaxHistory)
               {
                for(int h = WickMaxHistory - 1; h > 0; h--)
@@ -803,20 +809,20 @@ void UpdateAndDraw()
                   g_wickHistory[h] = g_wickHistory[h - 1];
                g_wickHistoryCount++;
               }
-            
+
             g_wickHistory[0].symbol    = sym;
             g_wickHistory[0].tf        = tf;
             g_wickHistory[0].barTime   = barTime;
             g_wickHistory[0].isUpper   = wick.isUpper;
             g_wickHistory[0].wickRatio = wick.wickRatio;
             g_wickHistory[0].multiplier = wick.multiplier;
-            
+
             if(SLG_IsOn())
               {
                double px = iClose(sym, tf, 1);
                SLG_LogEvent("WICK", sym, tf, barTime, px, wick.totalRange, WICK_Feat(wick));
               }
-            
+
             if(WickAlertOn)
               {
                SAL_Queue(StringFormat("【髭検知】%s %s %s髭 割合%.0f%% 倍率%.1f",
@@ -837,7 +843,8 @@ void UpdateAndDraw()
    int n = 0;
    int nSpike = 0;
    int nWolfe = 0;
-   
+   int nHarm = 0;
+
    for(int i = 0; i < g_scanTotal; i++)
      {
       if(!g_scan[i].ready) continue;
@@ -880,6 +887,7 @@ void UpdateAndDraw()
          baseKey = rrK.pct / 12.5;
         }
       candKey[n]  = (g_scan[i].state == CCOMP_TRANSITION) ? (100.0 + baseKey) : baseKey;
+      if(HARM_Enable && g_harm[i].found) nHarm++;
       n++;
      }
 
@@ -910,7 +918,8 @@ void UpdateAndDraw()
 
    int shown = MathMin(n, MaxRows);
 
-   string title = StringFormat("CCompression Scanner  (圧縮%d件 急変%d件 ウォルフ%d件 / 全%d組)", n - nSpike - nWolfe, nSpike, nWolfe, g_scanTotal);
+   string title = StringFormat("CCompression Scanner  (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
+                                n - nSpike - nWolfe, nSpike, nWolfe, nHarm, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
       if(ObjectFind(0, tname) < 0)
@@ -928,7 +937,7 @@ void UpdateAndDraw()
       ObjectSetString(0, tname, OBJPROP_TEXT, title);
       ObjectSetInteger(0, tname, OBJPROP_COLOR, clrWhite);
    }
-   
+
    ObjectsDeleteAll(0, "CCOMP_Scan_Row_");
    ArrayResize(g_rowSymbol, shown);
    ArrayResize(g_rowTF, shown);
@@ -962,24 +971,24 @@ void UpdateAndDraw()
             inst.symbol, tfName, CCOMP_StateText(inst.state), inst.score, inst.delta, inst.age);
          rowClr = CCOMP_StateColor(inst.state);
 
+         // ハーモニックパターンの表示は一覧から削除（解説パネルとチャート描画のみ）
+
          if(ShowImminenceInList || ShowEventInList)
            {
             REL_Result rrL;
             EVT_Info   evL;
             ComputeRowImminence(idx, rrL, evL);
-            
+
             if(ShowImminenceInList && REL_Enable)
               {
-               // ▼ 予兆スコア75%以上なら目立たせる処理
                if(rrL.pct >= 75.0)
                  {
-                  // 急変の色と同じにする (方向に応じて上昇色/下落色を適用)
                   if(rrL.dir > 0)
-                     rowClr = SpikeUpColor;    // 上昇方向ならライム色 (clrLime)
+                     rowClr = SpikeUpColor;
                   else if(rrL.dir < 0)
-                     rowClr = SpikeDownColor;  // 下落方向ならディープピンク色 (clrDeepPink)
+                     rowClr = SpikeDownColor;
                   else
-                     rowClr = clrYellow;       // 方向不明の場合は黄色
+                     rowClr = clrYellow;
 
                   line += StringFormat(" ★予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
                  }
@@ -1020,7 +1029,7 @@ void UpdateAndDraw()
 
    DrawDetailPanel();
    DrawWolfeChart();
-   DrawHarmonicChart(); // ← 追加
+   DrawHarmonicChart();
    DrawStatsPanel();
    DrawWickPanel();
    DrawWickHighlights();
@@ -1051,6 +1060,23 @@ void OnTimer()
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
   {
    if(id != CHARTEVENT_OBJECT_CLICK) return;
+
+   //--- ハーモニック描画モード切替ボタン
+   if(sparam == "CCOMP_Harm_BtnMode")
+     {
+      switch(g_harmDrawMode)
+        {
+         case HARM_DRAW_FULL:        g_harmDrawMode = HARM_DRAW_SHAPE_ONLY;  break;
+         case HARM_DRAW_SHAPE_ONLY:  g_harmDrawMode = HARM_DRAW_TEXT_ONLY;   break;
+         case HARM_DRAW_TEXT_ONLY:   g_harmDrawMode = HARM_DRAW_FAINT_SHAPE; break;
+         case HARM_DRAW_FAINT_SHAPE: g_harmDrawMode = HARM_DRAW_FULL;        break;
+        }
+      GlobalVariableSet("CCOMP_UI_HARMDRAW", (double)g_harmDrawMode);
+      DrawHarmonicChart();
+      ChartRedraw(0);
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      return;
+     }
 
    if(sparam == "CCOMP_Wick_BtnClear")
      {
@@ -1095,12 +1121,12 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
      {
       string idxStr = StringSubstr(sparam, StringLen(wickPrefix));
       int r = (int)StringToInteger(idxStr);
-      
+
       if(r >= 0 && r < g_wickHistoryCount)
         {
          string sym = g_wickHistory[r].symbol;
          ENUM_TIMEFRAMES tf = g_wickHistory[r].tf;
-         
+
          if(OpenInNewChart)
             ChartOpen(sym, tf);
          else
@@ -1111,10 +1137,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
    string prefix = "CCOMP_Scan_Row_";
    if(StringFind(sparam, prefix) != 0) return;
-   
+
    string idxStr = StringSubstr(sparam, StringLen(prefix));
    int r = (int)StringToInteger(idxStr);
-   
+
    if(r < 0 || r >= g_rowCount) return;
 
    string sym = g_rowSymbol[r];
@@ -1168,7 +1194,7 @@ string GetStateExplanation(const CCOMP_STATE st)
       case CCOMP_NORMAL:             return("通常の値動きです。圧縮は見られません");
       case CCOMP_COMPRESSION:        return("値動きが縮み始めています（弱い圧縮）");
       case CCOMP_STRONG_COMPRESSION: return("値動きがかなり縮んでいます（強い圧縮）");
-      case CCOMP_TIGHT_COMPRESSION:  return("値動きが極めて縮んでいます（非常に強い圧縮）");
+      case CCOMP_TIGHT_COMPRESSION:  return("値動きが極めて縮んでいま（非常に強い圧縮）");
       case CCOMP_TRANSITION:         return("強い圧縮から値幅が広がり始めました（方向は不明）");
      }
    return("");
@@ -1330,12 +1356,12 @@ void DrawDetailPanel()
          if(td.recentDir > 0)      { tdDir = "↑"; tdDirText = "売りシグナル点灯中"; }
          else if(td.recentDir < 0) { tdDir = "↓"; tdDirText = "買いシグナル点灯中"; }
          else                      { tdDir = "-"; tdDirText = "シグナルなし"; }
-         
+
          string setupTxt = (td.setupCount > 0) ? StringFormat("%s%d/9", TDS_DirChar(td.setupDir), td.setupCount) : "なし";
          string cdTxt    = (td.cdCount > 0)    ? StringFormat("%s%d/13", TDS_DirChar(td.cdDir), td.cdCount) : "なし";
          string done = "";
          if(td.lastSetupAgo >= 0)
-            done += StringFormat("%s9%s %d本前", TDS_DirChar(td.lastSetupDir), td.lastPerfect ? "(パーフェクト)" : "", td.lastSetupAgo);
+            done += StringFormat("%s9%s %d本前", TDS_DirChar(td.lastSetupDir), td.lastPerfect ? "(パーフェク)" : "", td.lastSetupAgo);
          if(td.lastCdAgo >= 0)
            {
             if(StringLen(done) > 0) done += " / ";
@@ -1343,15 +1369,12 @@ void DrawDetailPanel()
            }
          if(StringLen(done) == 0) done = "なし";
 
-         // 1行目：結論と基本状態
          lines[L] = StringFormat("  [TD %s]: %s (セットアップ%s, カウントダウン%s)", tdDir, tdDirText, setupTxt, cdTxt);
          clrs[L]  = CCOMP_StateColor(inst.state); L++;
-         
-         // 2行目：詳細状況
+
          lines[L] = StringFormat("  ・直近の完了：%s", done);
          clrs[L]  = clrWhite; L++;
 
-         // 3行目：判定
          if(inst.state == CCOMP_TRANSITION && td.recent)
            {
             lines[L] = "  判定：圧縮解除とTDのトレンド疲弊シグナルが一致。反転の信頼度が高い状態です。";
@@ -1373,7 +1396,7 @@ void DrawDetailPanel()
          if(w.dir > 0)      { wlfDir = "↑"; wlfDirText = "買いシグナル"; }
          else if(w.dir < 0) { wlfDir = "↓"; wlfDirText = "売りシグナル"; }
          else               { wlfDir = "-"; wlfDirText = "シグナルなし"; }
-         
+
          if(!w.found)
            {
             lines[L] = StringFormat("  [Wolfe波動 %s]: %s (直近でポイント5まで揃ったパターンはありません)", wlfDir, wlfDirText);
@@ -1385,17 +1408,14 @@ void DrawDetailPanel()
             bool rev  = (w.pinBar || w.engulf);
             string stateTxt = (w.state == 2) ? "ポイント5確定" : "ポイント5候補";
 
-            // 1行目：結論と基本状態
             lines[L] = StringFormat("  [Wolfe波動 %s]: %s (%s)", wlfDir, wlfDirText, stateTxt);
             clrs[L]  = CCOMP_StateColor(inst.state); L++;
 
-            // 2行目：詳細状況
             lines[L] = StringFormat("  ・ターゲット(EPA): %s (RR %.1f)  ・反転足: %s", 
                                     DoubleToString(w.epa, w.digits), w.rr, 
                                     (rev ? (w.pinBar ? "ピンバーあり" : "包み足あり") : "なし"));
             clrs[L]  = clrWhite; L++;
 
-            // 3行目：判定
             string judge = "";
             if(w.state != 2)
                judge = "ポイント5候補です。終値が1-3ラインの内側へ戻って足が確定するのを待ちます。";
@@ -1419,24 +1439,21 @@ void DrawDetailPanel()
          if(ic.relDir > 0)      { ichDir = "↑"; ichDirText = "買い優位"; }
          else if(ic.relDir < 0) { ichDir = "↓"; ichDirText = "売り優位"; }
          else                   { ichDir = "-"; ichDirText = "方向感なし"; }
-         
+
          string posTxt = (ic.pos > 0) ? "雲の上" : ((ic.pos < 0) ? "雲の下" : "雲の中");
          int roles = (ic.relDir > 0 ? ic.bullRoles : ic.bearRoles);
          string trendDir = (ic.relDir > 0 ? "買い" : "売り");
-         
-         // 1行目：結論と基本状態
+
          lines[L] = StringFormat("  [一目均衡表 %s]: %s (三役のうち%dつが%s方向)", 
                                  ichDir, ichDirText, roles, trendDir);
          clrs[L]  = CCOMP_StateColor(inst.state); L++;
-         
-         // 2行目：詳細状況
+
          lines[L] = StringFormat("  ・価格：%s  ・転換線：基準線を%sに抜けています  ・遅行スパン：%s", 
                                  posTxt, 
                                  (ic.relKind > 0 ? "上" : (ic.relKind < 0 ? "下" : "交差中")),
                                  (ic.chikou > 0 ? "26本前の価格より上" : (ic.chikou < 0 ? "26本前の価格より下" : "価格と同等")));
          clrs[L]  = clrWhite; L++;
 
-         // 3行目：判定
          if(inst.state == CCOMP_TRANSITION && ic.relKind != 0)
            {
             lines[L] = StringFormat("  判定：圧縮解除と一目の%sサインが一致。%s方向へのブレイクアウト期待大。", 
@@ -1472,16 +1489,13 @@ void DrawDetailPanel()
            }
          else
            {
-            // 1行目：結論と基本状態
             lines[L] = StringFormat("  [ハーモニック %s]: %s (%sパターン)", harmDir, harmDirText, hm.patternName);
             clrs[L]  = CCOMP_StateColor(inst.state); L++;
-            
-            // 2行目：詳細状況
+
             lines[L] = StringFormat("  ・完了点(PRZ): %s  ・X=%.5f, A=%.5f, B=%.5f, C=%.5f, D=%.5f", 
                                     DoubleToString(hm.PRZ, _Digits), hm.X, hm.A, hm.B, hm.C, hm.D);
             clrs[L]  = clrWhite; L++;
 
-            // 3行目：判定
             string judge = "";
             if(hm.direction > 0)
                judge = "PRZ付近での買い反転を期待します。損切りはX安値の下に設定してください。";
@@ -1545,6 +1559,22 @@ void DrawStatsPanel()
                 g_logOn ? "ログ記録: ON" : "ログ記録: OFF",
                 g_logOn ? C'40,90,40' : C'110,40,40');
    DrawUiButton("CCOMP_Scan_BtnReport", StatsX + 264, "レポート出力", C'40,70,110');
+   // ハーモニック描画モード切替ボタン
+   if(HARM_Enable)
+     {
+      // ハーモニック描画モードボタンのテキストと色をインラインで設定
+      string harmBtnText;
+      color  harmBtnClr;
+      switch(g_harmDrawMode)
+        {
+         case HARM_DRAW_FULL:        harmBtnText = "ハーモニック: 全表示";     harmBtnClr = C'40,90,40';  break;
+         case HARM_DRAW_SHAPE_ONLY:  harmBtnText = "ハーモニック: 図形のみ";   harmBtnClr = C'40,70,110'; break;
+         case HARM_DRAW_TEXT_ONLY:   harmBtnText = "ハーモニック: 文字のみ";   harmBtnClr = C'110,70,40'; break;
+         case HARM_DRAW_FAINT_SHAPE: harmBtnText = "ハーモニック: 図形薄+文字"; harmBtnClr = C'90,40,90';  break;
+         default:                    harmBtnText = "ハーモニック: ?";           harmBtnClr = C'70,70,70';  break;
+        }
+      DrawUiButton("CCOMP_Harm_BtnMode", StatsX + 396, harmBtnText, harmBtnClr);
+     }
 
    if(!g_statsOn)
      {
@@ -1634,7 +1664,7 @@ void DrawHarmonicChart()
       HARM_ClearDrawing();
       return;
      }
-   HARM_DrawPattern(g_harm[idx]);
+   HARM_DrawPattern(g_harm[idx], g_harmDrawMode);
   }
 
 //+------------------------------------------------------------------+
@@ -1702,26 +1732,26 @@ void DrawWickPanel()
          ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
          ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
         }
-      
+
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);
       ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
       ObjectSetInteger(0, name, OBJPROP_ZORDER, 100); 
-      
+
       WICK_HistoryItem item = g_wickHistory[r];
       string tfName = EnumToString(item.tf);
       StringReplace(tfName, "PERIOD_", "");
-      
+
       // サーバー時間を日本時間(JST, UTC+9)に変換
       int offset = (int)((TimeGMT() - TimeTradeServer()) / 3600) + 9;
       datetime jstTime = item.barTime + (datetime)(offset * 3600);
       string timeStr = TimeToString(jstTime, TIME_MINUTES);
-      
+
       string text = StringFormat("%-9s %-4s %s髭 %s 割合%.0f%% 倍率%.1f",
                                  item.symbol, tfName,
                                  item.isUpper ? "上" : "下",
                                  timeStr,
                                  item.wickRatio * 100, item.multiplier);
-      
+
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
       ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 30 + r * 14);
       ObjectSetString(0, name, OBJPROP_TEXT, text);
