@@ -58,7 +58,7 @@ input bool SortByImminence     = false;  // trueなら、圧縮表示を予兆�
 input group "=== 解説パネル(現在のチャートの通貨・時間足) ==="
 input bool ShowDetailPanel = true;               // 解説パネルを表示する
 input ENUM_BASE_CORNER DetailCorner = CORNER_RIGHT_LOWER; // 表示する隅（右下隅基準）
-input int  DetailX         = 50;                 // 右端から50ピクセルの位置
+input int  DetailX         = 10;                 // 右端から10ピクセルの位置（さらに左に配置）
 input int  DetailY         = 20;                 // 下から20ピクセルの位置
 
 input group "=== 表示する最低状態 ==="
@@ -950,30 +950,10 @@ void UpdateAndDraw()
             inst.symbol, tfName, g_spikeUp[idx] ? "急変 ↑ (上昇)" : "急変 ↓ (下落)",
             g_spikeRatio[idx], g_spikeZ[idx]);
          rowClr = g_spikeUp[idx] ? SpikeUpColor : SpikeDownColor;
-
-         if(TDS_Enable && TDS_ShowInList && g_td[idx].ready)
-           {
-            line += TDS_Text(g_td[idx]);
-            if(TDS_IsReversalAligned(g_td[idx], g_spikeUp[idx]))
-               line += " ★TD反転整合";
-           }
-         if(WLF_Enable && WLF_ShowInList)
-            line += WLF_Text(g_wlf[idx]);
-         if(ICH_Enable && ICH_ShowInList)
-            line += ICH_Text(g_ich[idx]);
         }
       else if(candKind[r] == 2)
         {
          line = StringFormat("%-9s %-4s %-20s", inst.symbol, tfName, "ウォルフ波動");
-         line += WLF_Text(g_wlf[idx]);
-         if(TDS_Enable && TDS_ShowInList && g_td[idx].ready)
-           {
-            line += TDS_Text(g_td[idx]);
-            if(g_td[idx].recent && g_td[idx].recentDir == -g_wlf[idx].dir)
-               line += " ★TD整合";
-           }
-         if(ICH_Enable && ICH_ShowInList)
-            line += ICH_Text(g_ich[idx]);
          rowClr = (g_wlf[idx].dir > 0) ? WLF_ColorBuy : WLF_ColorSell;
         }
       else
@@ -1008,50 +988,6 @@ void UpdateAndDraw()
                   line += StringFormat("  予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
                  }
               }
-           }
-
-         // 1. TD（TDシーケンシャル）
-         if(TDS_Enable && TDS_ShowInList && g_td[idx].ready)
-           {
-            string tdDir = "";
-            if(g_td[idx].recentDir > 0)      tdDir = "↑";
-            else if(g_td[idx].recentDir < 0) tdDir = "↓";
-            
-            line += StringFormat("[TD %s]", tdDir);
-            if(inst.state == CCOMP_TRANSITION && g_td[idx].recent)
-               line += StringFormat(" ★TD重複%s", tdDir);
-           }
-
-         // 2. WLF（ウォルフ波動）
-         if(WLF_Enable && WLF_ShowInList)
-           {
-            string wlfDir = "";
-            if(g_wlf[idx].dir > 0)      wlfDir = "↑";
-            else if(g_wlf[idx].dir < 0) wlfDir = "↓";
-            
-            line += StringFormat("[WLF %s]", wlfDir);
-           }
-
-         // 3. ICH（一目均衡表）
-         if(ICH_Enable && ICH_ShowInList)
-           {
-            string ichDir = "";
-            if(g_ich[idx].relDir > 0)      ichDir = "↑";
-            else if(g_ich[idx].relDir < 0) ichDir = "↓";
-            
-            line += StringFormat("[一目 %s]", ichDir);
-            if(inst.state == CCOMP_TRANSITION && ICH_HasRelease(g_ich[idx]))
-               line += StringFormat(" ★一目解除%s", ichDir);
-           }
-
-         // 4. HARM（ハーモニックパターン）
-         if(HARM_Enable && HARM_ShowInList && g_harm[idx].found)
-           {
-            string harmDir = "";
-            if(g_harm[idx].direction > 0)      harmDir = "↑";
-            else if(g_harm[idx].direction < 0) harmDir = "↓";
-            
-            line += StringFormat("[%s %s]", g_harm[idx].patternName, harmDir);
            }
         }
 
@@ -1360,7 +1296,7 @@ void DrawDetailPanel()
          lines[L] = StringFormat("  予兆スコア %.0f%%%s  (自身の圧縮%.0f%% / 関連の圧縮%.0f%% / 関連の急変%.0f%% / 指標・開場%.0f%%)  ※目安であり確率ではありません",
                                  rrD.pct, rrD.dir > 0 ? " 方向目安↑" : (rrD.dir < 0 ? " 方向目安↓" : ""),
                                  rrD.compSelf * 100.0, rrD.compRel * 100.0, rrD.spikeRel * 100.0, rrD.event * 100.0);
-         clrs[L]  = clrAqua; L++;
+         clrs[L]  = CCOMP_StateColor(inst.state); L++;
 
          lines[L] = StringFormat("  関連ペア(|相関|%.1f以上): %d本   急変中: %s   強く圧縮中: %s",
                                  REL_MinCorr, rrD.nRelated,
@@ -1409,7 +1345,7 @@ void DrawDetailPanel()
 
          // 1行目：結論と基本状態
          lines[L] = StringFormat("  [TD %s]: %s (セットアップ%s, カウントダウン%s)", tdDir, tdDirText, setupTxt, cdTxt);
-         clrs[L]  = (TDS_Enable && g_td[idx].ready) ? clrYellow : clrWhite; L++;
+         clrs[L]  = CCOMP_StateColor(inst.state); L++;
          
          // 2行目：詳細状況
          lines[L] = StringFormat("  ・直近の完了：%s", done);
@@ -1451,7 +1387,7 @@ void DrawDetailPanel()
 
             // 1行目：結論と基本状態
             lines[L] = StringFormat("  [Wolfe波動 %s]: %s (%s)", wlfDir, wlfDirText, stateTxt);
-            clrs[L]  = (WLF_Enable && g_wlf[idx].ready && w.found) ? clrYellow : clrWhite; L++;
+            clrs[L]  = CCOMP_StateColor(inst.state); L++;
 
             // 2行目：詳細状況
             lines[L] = StringFormat("  ・ターゲット(EPA): %s (RR %.1f)  ・反転足: %s", 
@@ -1491,7 +1427,7 @@ void DrawDetailPanel()
          // 1行目：結論と基本状態
          lines[L] = StringFormat("  [一目均衡表 %s]: %s (三役のうち%dつが%s方向)", 
                                  ichDir, ichDirText, roles, trendDir);
-         clrs[L]  = (ICH_Enable && g_ich[idx].ready) ? clrYellow : clrWhite; L++;
+         clrs[L]  = CCOMP_StateColor(inst.state); L++;
          
          // 2行目：詳細状況
          lines[L] = StringFormat("  ・価格：%s  ・転換線：基準線を%sに抜けています  ・遅行スパン：%s", 
@@ -1538,7 +1474,7 @@ void DrawDetailPanel()
            {
             // 1行目：結論と基本状態
             lines[L] = StringFormat("  [ハーモニック %s]: %s (%sパターン)", harmDir, harmDirText, hm.patternName);
-            clrs[L]  = (HARM_Enable && g_harm[idx].ready && hm.found) ? clrYellow : clrWhite; L++;
+            clrs[L]  = CCOMP_StateColor(inst.state); L++;
             
             // 2行目：詳細状況
             lines[L] = StringFormat("  ・完了点(PRZ): %s  ・X=%.5f, A=%.5f, B=%.5f, C=%.5f, D=%.5f", 
