@@ -38,13 +38,14 @@ struct HARM_Result
 
 //--- 入力パラメータ
 input group "=== ハーモニックパターン ==="
-input bool   HARM_Enable       = true;   // ハーモニック検知を有にする
-input bool   HARM_ShowInList   = true;   // スキャナー一覧に表示する
-input bool   HARM_DrawOnChart  = true;   // チャート上に描画する
-input int    HARM_LookbackBars = 150;    // 探索するバー数
-input double HARM_Tolerance    = 0.06;   // フィボナッチ比率の許容誤差 (6%)
-input int    HARM_SwingSpan    = 5;      // スイング検出の左右バー数
-input double HARM_MinSwingATR  = 0.3;    // スイング最小変動幅(ATR倍)
+input bool   HARM_Enable            = true;   // ハーモニック検知を有にする
+input bool   HARM_ShowInList        = true;   // スキャナー一覧に表示する
+input bool   HARM_DrawOnChart       = true;   // チャート上に描画する
+input int    HARM_LookbackBars      = 150;    // 探索するバー数
+input double HARM_Tolerance         = 0.06;   // フィボナッチ比率の許容誤差 (6%)
+input int    HARM_SwingSpan         = 5;      // スイング検出の左右バー数
+input double HARM_MinSwingATR       = 0.3;    // スイング最小変動幅(ATR倍)
+input int    HARM_MaxPatternAgeBars = 30;     // D点がこの本数より古いパターンは無視（追加）
 
 //--- グローバル変数
 string g_harmDrawKey = "";
@@ -241,6 +242,10 @@ bool HARM_Compute(const string symbol, const ENUM_TIMEFRAMES tf, HARM_Result &re
       datetime tC = times[start+3];
       datetime tD = times[start+4];
 
+      // D点が古すぎるパターンはスキップ（修正3）
+      int dShift = iBarShift(symbol, tf, tD, true);
+      if(dShift < 1 || dShift > HARM_MaxPatternAgeBars) continue;
+
       // 方向性の判定
       bool isBullish = (A > X && B < A && C > B && D < C); // X(Low)->A(High)->B(Low)->C(High)->D(Low)
       bool isBearish = (A < X && B > A && C < B && D > C); // X(High)->A(Low)->B(High)->C(Low)->D(High)
@@ -398,12 +403,15 @@ void HARM_DrawPattern(const HARM_Result &res, HARM_DRAW_MODE mode=HARM_DRAW_FULL
         }
      }
 
-   //--- 4. PRZゾーン矩形（図形）
+   //--- 4. PRZゾーン矩形（図形）- 修正2を適用
    if(drawShape)
      {
       string przZone = "HARM_PRZ_Zone";
-      double przTop = MathMax(res.D, res.PRZ) + MathAbs(res.D - res.PRZ) * 0.3;
-      double przBot = MathMin(res.D, res.PRZ) - MathAbs(res.D - res.PRZ) * 0.3;
+      // CDレッグの15%をゾーンの半幅にする
+      double zoneHalf = MathAbs(res.C - res.D) * 0.15;
+      if(zoneHalf <= 0) zoneHalf = MathAbs(res.X - res.A) * 0.05;
+      double przTop = res.PRZ + zoneHalf;
+      double przBot = res.PRZ - zoneHalf;
       if(ObjectCreate(0, przZone, OBJ_RECTANGLE, 0, res.tD, przTop, res.tD + (res.tD - res.tX) / 3, przBot))
         {
          color zoneClr = faint ? C'30,0,30' : C'60,0,60';
