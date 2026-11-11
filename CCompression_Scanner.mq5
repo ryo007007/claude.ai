@@ -168,6 +168,21 @@ void DrawWolfeChart();    // ウォルフ波動のチャート描画(定義は�
 void DrawHarmonicChart(); // ハーモニックパターンのチャート描画(追加)
 
 //+------------------------------------------------------------------+
+//| 圧縮状態の短縮テキスト（一覧表示用）                              |
+//+------------------------------------------------------------------+
+string CCOMP_StateShortText(const CCOMP_STATE st)
+  {
+   switch(st)
+     {
+      case CCOMP_TRANSITION:         return "発射";
+      case CCOMP_TIGHT_COMPRESSION:  return "超圧";
+      case CCOMP_STRONG_COMPRESSION: return "強圧";
+      case CCOMP_COMPRESSION:        return "圧縮";
+      default:                       return "";
+     }
+  }
+
+//+------------------------------------------------------------------+
 int ParseSymbols(string src, string &outArr[])
   {
    string raw[];
@@ -955,20 +970,20 @@ void UpdateAndDraw()
       color  rowClr;
       if(candKind[r] == 1)
         {
-         line = StringFormat("%-9s %-4s %-20s ATR比%.1f Z%+.1f",
-            inst.symbol, tfName, g_spikeUp[idx] ? "急変 ↑ (上昇)" : "急変 ↓ (下落)",
+         line = StringFormat("%-9s %-4s %-6s ATR比%.1f Z%+.1f",
+            inst.symbol, tfName, g_spikeUp[idx] ? "急変↑" : "急変↓",
             g_spikeRatio[idx], g_spikeZ[idx]);
          rowClr = g_spikeUp[idx] ? SpikeUpColor : SpikeDownColor;
         }
       else if(candKind[r] == 2)
         {
-         line = StringFormat("%-9s %-4s %-20s", inst.symbol, tfName, "ウォルフ波動");
+         line = StringFormat("%-9s %-4s %-6s", inst.symbol, tfName, "ウォルフ");
          rowClr = (g_wlf[idx].dir > 0) ? WLF_ColorBuy : WLF_ColorSell;
         }
       else
         {
-         line = StringFormat("%-9s %-4s %-20s Sc%d Δ%+d Age%d",
-            inst.symbol, tfName, CCOMP_StateText(inst.state), inst.score, inst.delta, inst.age);
+         line = StringFormat("%-9s %-4s %-6s Sc%d Δ%+d Age%d",
+            inst.symbol, tfName, CCOMP_StateShortText(inst.state), inst.score, inst.delta, inst.age);
          rowClr = CCOMP_StateColor(inst.state);
 
          // ハーモニックパターンの表示は一覧から削除（解説パネルとチャート描画のみ）
