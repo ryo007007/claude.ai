@@ -699,38 +699,39 @@ int OnInit()
    LoadTransitionHoldStates();
    LoadLastOutcomes();
 
-   // パッチ6：v1.40(CCV130) + v1.46(CCV146) → v1.48(CCV148) へ移行
-   for(int mi = 0; mi < g_scanTotal; mi++)
+// パッチ9：CCV147 / CCV146 / CCV130 → CCV148 へ移行（新しい順に見る）
+for(int mi = 0; mi < g_scanTotal; mi++)
+  {
+   if(OutcomeStatGet(mi, 0) > 0.0) continue;
+   string baseOld = g_scan[mi].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[mi].tf));
+   string prefixes[3];
+   prefixes[0] = "CCV147_"; // ← 追加：直前のv1.47を最優先
+   prefixes[1] = "CCV146_";
+   prefixes[2] = "CCV130_";
+   for(int pi = 0; pi < 3; pi++)
      {
-      if(OutcomeStatGet(mi, 0) > 0.0) continue;
-      string baseOld = g_scan[mi].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[mi].tf));
-      string prefixes[2];
-      prefixes[0] = "CCV130_";
-      prefixes[1] = "CCV146_";
-      for(int pi = 0; pi < 2; pi++)
+      bool anyMoved = false;
+      for(int m = 0; m <= 6; m++)
         {
-         bool anyMoved = false;
-         for(int m = 0; m <= 6; m++)
+         string kOld = prefixes[pi] + "ST_" + baseOld + "_" + IntegerToString(m);
+         if(GlobalVariableCheck(kOld) && GlobalVariableGet(kOld) > 0.0)
            {
-            string kOld = prefixes[pi] + "ST_" + baseOld + "_" + IntegerToString(m);
-            if(GlobalVariableCheck(kOld) && GlobalVariableGet(kOld) > 0.0)
+            GlobalVariableSet(OutcomeStatKey(mi, m), GlobalVariableGet(kOld));
+            anyMoved = true;
+           }
+         for(int sc = 0; sc <= 8; sc++)
+           {
+            string kOldS = prefixes[pi] + "SC_" + baseOld + "_" + IntegerToString(sc) + "_" + IntegerToString(m);
+            if(GlobalVariableCheck(kOldS) && GlobalVariableGet(kOldS) > 0.0)
               {
-               GlobalVariableSet(OutcomeStatKey(mi, m), GlobalVariableGet(kOld));
+               GlobalVariableSet(OutcomeStatKey(mi, m, sc), GlobalVariableGet(kOldS));
                anyMoved = true;
               }
-            for(int sc = 0; sc <= 8; sc++)
-              {
-               string kOldS = prefixes[pi] + "SC_" + baseOld + "_" + IntegerToString(sc) + "_" + IntegerToString(m);
-               if(GlobalVariableCheck(kOldS) && GlobalVariableGet(kOldS) > 0.0)
-                 {
-                  GlobalVariableSet(OutcomeStatKey(mi, m, sc), GlobalVariableGet(kOldS));
-                  anyMoved = true;
-                 }
-              }
            }
-         if(anyMoved) break;
         }
+      if(anyMoved) break;
      }
+  }
 
    if(UseWickDetector && WickLookbackBars > 0)
      {
