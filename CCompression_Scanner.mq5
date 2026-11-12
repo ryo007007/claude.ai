@@ -6,10 +6,10 @@
 //|  ・圧縮が強い順(TRANSITION優先 → Score降順)にソート                |
 //|  ・行をクリックするとその通貨ペア・時間足にチャートが切り替わる    |
 //|  ・TRANSITION表示保持・急変検知・事後計測・ログ記録完全対応        |
-//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.49)      |
+//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.51)      |
 //+------------------------------------------------------------------+
 #property copyright "CCompression scanner"
-#property version   "1.49"
+#property version   "1.51"
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -24,6 +24,7 @@
 #include "MarketEngines/IchimokuEngine.mqh"          // 一目均衡表エンジン
 #include "MarketEngines/WickDetector.mqh"        // 髭検知エンジン（追加）
 #include "MarketEngines/HarmonicPatternEngine.mqh" // ハーモニックパターンエンジン（追加）
+#include "MarketEngines/EMAAlignmentEngine.mqh" // EMAアライメント（押し目/戻り）
 
 //---------------- 入力パラメータ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
@@ -76,6 +77,13 @@ input bool ShowCompression       = true; // COMPRESSION以上を表示
 input bool ShowOnlyStrongOrAbove = false; // trueならSTRONG COMPRESSION以上のみ表示
 input bool ShowTransition        = true; // TRANSITION(圧縮解除中)を表示
 
+input group "=== EMAアライメント(押し目/戻り) ==="
+input bool InpEMAAlignEnable    = true;  // EMAアライメントを使う
+input int  InpEMAAlignPeriod    = 200;   // EMA期間
+input int  InpEMAAlignSlopeBars = 5;     // 何本前と比較して向きを決めるか
+input bool InpEMAAlignUseD1     = false; // 日足200EMAも条件に入れる（デモ検証中はfalse推奨）[cite: 9]
+input bool InpEMAAlignUseH4     = true;  // 4時間足200EMAも条件に入れる（falseならH1のみで判定）[cite: 9]
+
 input group "=== 急変検知との連携 ==="
 input bool UseSpikeOverride  = true;  // 急変を検知したら圧縮表示を解除して「急変」として表示する
 input int  SpikeHoldBars     = 3;     // 急変表示を保持する本数(その時間足の本数)
@@ -126,7 +134,7 @@ bool            g_suppressed[];
 // 画面のON/OFF状態
 bool            g_logOn      = true;
 bool            g_statsOn    = true;
-int             g_filterMode = 0; // 0=全部 1=発射 2=急変 3=超圧 4=強圧 5=圧縮 (パッチ12)
+int             g_filterMode = 0; // 0=全部 1=発射 2=急変 3=超圧 4=強圧 5=圧縮
 
 // 予兆スコア計算用
 int             g_immScore[];
@@ -143,6 +151,7 @@ datetime        g_ichBar[];
 HARM_Result     g_harm[];
 datetime        g_harmBar[];
 HARM_DRAW_MODE  g_harmDrawMode = HARM_DRAW_FULL;
+EMA_ALIGN_Result g_emaAlign[]; // symbolごとのEMAアライメント結果
 
 //--- TRANSITION表示保持・事後計測用
 int             g_transitionHoldRemaining[];
@@ -496,7 +505,6 @@ string TransitionRankingBrief(const int i)
                        total, direction, bias, falseRate, up, down, falseCount, noMove, noDir);
   }
 
-// パッチ11：右端切れ対策・短縮版実績
 string TransitionRankingBriefShort(const int i)
   {
    double total = OutcomeStatGet(i, 0);
@@ -507,7 +515,6 @@ string TransitionRankingBriefShort(const int i)
    return StringFormat("過%.0f 上%.0f下%.0f だま%.0f%%", total, up, down, falseRate);
   }
 
-// パッチ12-3：フィルター判定関数
 bool PassFilter(const int kind, const CCOMP_STATE dispState)
   {
    if(g_filterMode == 0) return true;
@@ -679,6 +686,7 @@ int OnInit()
    ArrayResize(g_verification, g_scanTotal);
    ArrayResize(g_lastOutcome, g_scanTotal);
    ArrayResize(g_lastOutcomeTime, g_scanTotal);
+   ArrayResize(g_emaAlign, g_symbolCount); // symbol分だけ
 
    for(int tk = 0; tk < g_scanTotal; tk++)
      {
@@ -724,7 +732,7 @@ int OnInit()
    g_logOn   = GlobalVariableCheck("CCOMP_UI_LOG")   ? (GlobalVariableGet("CCOMP_UI_LOG")   > 0.5) : SLG_Enable;
    g_statsOn = GlobalVariableCheck("CCOMP_UI_STATS") ? (GlobalVariableGet("CCOMP_UI_STATS") > 0.5) : ShowStatsPanel;
    g_wickHL_On = GlobalVariableCheck("CCOMP_UI_WICKHL") ? (GlobalVariableGet("CCOMP_UI_WICKHL") > 0.5) : true;
-   g_filterMode = GlobalVariableCheck("CCOMP_UI_FILTER") ? (int)GlobalVariableGet("CCOMP_UI_FILTER") : 0; // パッチ12-2
+   g_filterMode = GlobalVariableCheck("CCOMP_UI_FILTER") ? (int)GlobalVariableGet("CCOMP_UI_FILTER") : 0;
 
    if(GlobalVariableCheck("CCOMP_UI_HARMDRAW"))
       g_harmDrawMode = (HARM_DRAW_MODE)(int)GlobalVariableGet("CCOMP_UI_HARMDRAW");
@@ -735,7 +743,7 @@ int OnInit()
    LoadTransitionHoldStates();
    LoadLastOutcomes();
 
-   // パッチ9：CCV147 / CCV146 / CCV130 → CCV148 へ移行（CCV148_は変えない）
+   // CCV148_ キーを維持
    for(int mi = 0; mi < g_scanTotal; mi++)
      {
       if(OutcomeStatGet(mi, 0) > 0.0) continue;
@@ -820,6 +828,7 @@ void OnDeinit(const int reason)
    EventKillTimer();
    for(int i = 0; i < g_scanTotal; i++)
       CCOMP_ReleaseInstance(g_scan[i]);
+   EMA_AlignRelease();
    ObjectsDeleteAll(0, "CCOMP_Scan_");
    ObjectsDeleteAll(0, "CCOMP_Wick_");
    ObjectsDeleteAll(0, "CCOMP_WickHL_");
@@ -1188,6 +1197,13 @@ void UpdateAndDraw()
         }
      }
 
+   // パッチEMA-1：EMAアライメントは symbol ごとに1回だけ計算（UseH4 引数を追加）
+   if(InpEMAAlignEnable)
+     {
+      for(int si = 0; si < g_symbolCount; si++)
+         EMA_AlignCompute(g_symbols[si], InpEMAAlignPeriod, InpEMAAlignSlopeBars, InpEMAAlignUseD1, InpEMAAlignUseH4, g_emaAlign[si]);
+     }
+
    int    candIdx[];
    double candKey[];
    int    candKind[];
@@ -1205,7 +1221,6 @@ void UpdateAndDraw()
 
       if(UseSpikeOverride && nowT < g_spikeUntil[i])
         {
-         // パッチ12-4：急変フィルター
          if(!PassFilter(1, CCOMP_NORMAL)) continue;
          candIdx[n]  = i;
          candKind[n] = 1;
@@ -1234,7 +1249,6 @@ void UpdateAndDraw()
          continue;
         }
 
-      // パッチ12-4：圧縮・発射フィルター
       if(!PassFilter(0, dispState)) continue;
 
       candIdx[n]  = i;
@@ -1279,7 +1293,7 @@ void UpdateAndDraw()
 
    int shown = MathMin(n, MaxRows);
 
-   string title = StringFormat("CCompression Scanner (v1.49) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
+   string title = StringFormat("CCompression Scanner (v1.51) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
                                 n - nSpike - nWolfe, nSpike, nWolfe, nHarm, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
@@ -1341,7 +1355,6 @@ void UpdateAndDraw()
                   transitionRank++;
               }
 
-            // パッチ10：発射後○本 → 発射○ に短縮、パディング幅を6に縮小
             string stateLabel;
             if(inst.state == CCOMP_TRANSITION)
                stateLabel = "発射中";
@@ -1353,26 +1366,17 @@ void UpdateAndDraw()
               }
             stateLabel = PadToDisplayWidth(stateLabel, 6);
 
-            line = StringFormat("#%02d %-8s %-4s %s Sc%d Δ%+d Age%d",
+            line = StringFormat("#%02d %-8s %-4s %s Sc%d Δ%+d Age%d |",
                                 transitionRank, inst.symbol, tfName, stateLabel,
                                 inst.score, inst.delta, inst.age);
-            
-            // パッチ11：[前回:...] → [...] 短縮 ＆ 過去実績を短縮版に置き換え
-            if(StringLen(g_lastOutcome[idx]) > 0)
-               line += " [" + g_lastOutcome[idx] + "]";
-
-            string briefShort = TransitionRankingBriefShort(idx);
-            if(StringLen(briefShort) > 0)
-               line += " | " + briefShort;
            }
          else
            {
-            string outcomeStr = (g_lastOutcome[idx] != "" ? " [" + g_lastOutcome[idx] + "]" : "");
-            line = StringFormat("%-9s %-4s %-6s Sc%d Δ%+d Age%d%s",
-               inst.symbol, tfName, CCOMP_StateShortText(dispState), inst.score, inst.delta, inst.age, outcomeStr);
+            line = StringFormat("%-9s %-4s %-6s Sc%d Δ%+d Age%d",
+               inst.symbol, tfName, CCOMP_StateShortText(dispState), inst.score, inst.delta, inst.age);
            }
 
-         if(ShowImminenceInList || ShowEventInList)
+         if(dispState != CCOMP_TRANSITION && (ShowImminenceInList || ShowEventInList))
            {
             REL_Result rrL;
             EVT_Info   evL;
@@ -1395,16 +1399,30 @@ void UpdateAndDraw()
                  {
                   line += StringFormat("  予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
                  }
+               line += " |";
               }
+           }
+        }
 
-            // パッチ11：指標名を削って通貨だけに短縮
-            if(ShowEventInList)
+      // パッチEMA-2改：圧縮・強圧・超圧・発射・急変の5つ全てにEMAサインを付ける
+      if(InpEMAAlignEnable && (candKind[r] == 0 || candKind[r] == 1))
+        {
+         int siEMA = idx / g_tfCount;
+         if(g_emaAlign[siEMA].ready && g_emaAlign[siEMA].dir != 0)
+           {
+            string emaMark = (g_emaAlign[siEMA].dir > 0 ? " ◎押し目" : " ◎戻り");
+            if(candKind[r] == 1)
               {
-               if(evL.minToNext >= 0)
-                  line += StringFormat(" | 次%s %d分", evL.nextCur, evL.minToNext);
-               else if(EVT_UseSessions && evL.minToSession >= 0)
-                  line += StringFormat(" | 開場%d分", evL.minToSession);
+               // 急変行は末尾に | がないのでそのまま付ける
+               line += emaMark;
               }
+            else if(StringSubstr(line, StringLen(line) - 2) == " |")
+              {
+               // 圧縮・強圧・超圧・発射行は | の内側に挿入
+               line = StringSubstr(line, 0, StringLen(line) - 2) + emaMark + " |";
+              }
+            else
+               line += emaMark;
            }
         }
 
@@ -1493,13 +1511,11 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       return;
      }
 
-   // パッチ12-6：フィルターボタンのクリック処理
    if(sparam == "CCOMP_Scan_BtnFilter")
      {
       g_filterMode = (g_filterMode + 1) % 6; // 0→1→2→3→4→5→0
       GlobalVariableSet("CCOMP_UI_FILTER", (double)g_filterMode);
-      DrawStatsPanel();
-      ChartRedraw(0);
+      UpdateAndDraw(); // 押した瞬間に一覧を再描画
       ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       return;
      }
@@ -1734,10 +1750,12 @@ void DrawDetailPanel()
                                  tot, up, dn, fl, nm, nd, ud,
                                  (tot > 0.0 ? (up + dn) / tot * 100.0 : 0.0));
          clrs[L] = base; L++;
+         
          if(StringLen(g_lastOutcome[idx]) > 0)
            {
             lines[L] = "  [前回結果] " + g_lastOutcome[idx];
-            clrs[L] = base; L++;
+            clrs[L] = CCOMP_StateColor(DisplayStateForRow(idx));
+            L++;
            }
          for(int sc = 0; sc <= 8; sc++)
            {
@@ -1771,6 +1789,31 @@ void DrawDetailPanel()
                                  StringLen(rrD.topSpike) > 0 ? rrD.topSpike : "なし",
                                  StringLen(rrD.topComp)  > 0 ? rrD.topComp  : "なし");
          clrs[L]  = base; L++;
+        }
+
+      // パッチEMA-3：解説パネルにEMAアライメントの内訳（H4判定外対応）
+      if(InpEMAAlignEnable)
+        {
+         int siD = -1;
+         for(int s = 0; s < g_symbolCount; s++)
+            if(g_symbols[s] == inst.symbol) { siD = s; break; }
+         if(siD >= 0 && g_emaAlign[siD].ready)
+           {
+            EMA_ALIGN_Result ea = g_emaAlign[siD];
+            string h4Txt = !InpEMAAlignUseH4 ? "判定外" : (ea.slopeH4 > 0 ? "上向き" : (ea.slopeH4 < 0 ? "下向き" : "横ばい"));
+            string h1Txt = (ea.slopeH1 > 0 ? "上向き" : (ea.slopeH1 < 0 ? "下向き" : "横ばい"));
+            string posTxt = (ea.pricePos > 0 ? "H1 EMAより上" : (ea.pricePos < 0 ? "H1 EMAより下" : "H1 EMA付近"));
+            string alignTxt = (ea.dir > 0 ? " → 押し目条件成立" : (ea.dir < 0 ? " → 戻り条件成立" : " → 条件なし"));
+            lines[L] = StringFormat("  [EMAアライメント] H4 %s / H1 %s / 価格は%s%s",
+                                    h4Txt, h1Txt, posTxt, alignTxt);
+            clrs[L] = (ea.dir != 0 ? CCOMP_StateColor(inst.state) : base); L++;
+            if(InpEMAAlignUseD1)
+              {
+               string d1Txt = (ea.slopeD1 > 0 ? "上向き" : (ea.slopeD1 < 0 ? "下向き" : "横ばい"));
+               lines[L] = StringFormat("  [EMA200 日足] %s（H4/H1と揃っていないと条件なし）", d1Txt);
+               clrs[L] = base; L++;
+              }
+           }
         }
 
       string evNext = (evD.minToNext >= 0)
@@ -1989,7 +2032,6 @@ void DrawUiButton(const string name, const int x, const string text, const color
 
 void DrawStatsPanel()
   {
-   // パッチ12-5：フィルターボタンを右上ボタン群の先頭に追加
    DrawUiButton("CCOMP_Scan_BtnFilter", StatsX,
                 FilterModeText(),
                 g_filterMode == 0 ? C'40,70,110' : C'110,70,40');
