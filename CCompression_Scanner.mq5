@@ -6,10 +6,10 @@
 //|  ・圧縮が強い順(TRANSITION優先 → Score降順)にソート                |
 //|  ・行をクリックするとその通貨ペア・時間足にチャートが切り替わる    |
 //|  ・TRANSITION表示保持・急変検知・事後計測・ログ記録完全対応        |
-//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.47)      |
+//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.48)      |
 //+------------------------------------------------------------------+
 #property copyright "CCompression scanner"
-#property version   "1.47"
+#property version   "1.48"
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -296,7 +296,6 @@ void SaveTransitionHoldState(const int i)
       GlobalVariableDel(key);
   }
 
-//--- パッチ1：時刻 ＋ 結果コードの保存・復元関数群
 int OutcomeCodeFromText(const string outcome)
   {
    if(outcome == "上方ブレイク") return 1;
@@ -424,8 +423,8 @@ string OutcomeStatKey(const int i, const int metric, const int scoreBucket=-1)
   {
    string base = g_scan[i].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[i].tf));
    if(scoreBucket >= 0)
-      return "CCV147_SC_" + base + "_" + IntegerToString(scoreBucket) + "_" + IntegerToString(metric);
-   return "CCV147_ST_" + base + "_" + IntegerToString(metric);
+      return "CCV148_SC_" + base + "_" + IntegerToString(scoreBucket) + "_" + IntegerToString(metric);
+   return "CCV148_ST_" + base + "_" + IntegerToString(metric);
   }
 
 double OutcomeStatGet(const int i, const int metric, const int scoreBucket=-1)
@@ -480,7 +479,6 @@ double TransitionRankingScore(const int i)
    return liveScore * 10.0 + TransitionHistoricalQuality(i) * MathMax(0.0, InpRankingHistoryWeight);
   }
 
-//--- パッチ2：過去0件でも必ず詳細内訳つきで表示する関数
 string TransitionRankingBrief(const int i)
   {
    double total = OutcomeStatGet(i, 0);
@@ -553,6 +551,7 @@ void JudgeAndFinishTransition(const int i)
       g_lastOutcome[i] = "判定保留";
       g_lastOutcomeTime[i] = TimeCurrent();
       g_verification[i].active = false;
+      SaveOutcomeState(i); // パッチ7：判定保留も切替後に残す
       return;
      }
 
@@ -698,24 +697,38 @@ int OnInit()
    SLG_SetOn(g_logOn);
    LoadSpikeStates();
    LoadTransitionHoldStates();
-   LoadLastOutcomes(); // 追加：切替後も [前回:...] を復元
+   LoadLastOutcomes();
 
-   // パッチ5：v1.40 (CCV130) → v1.47 (CCV147) への過去実績データ移行（推奨）
+   // パッチ6：v1.40(CCV130) + v1.46(CCV146) → v1.48(CCV148) へ移行
    for(int mi = 0; mi < g_scanTotal; mi++)
      {
       if(OutcomeStatGet(mi, 0) > 0.0) continue;
-      string base140 = g_scan[mi].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[mi].tf));
-      for(int m = 0; m <= 6; m++)
+      string baseOld = g_scan[mi].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[mi].tf));
+      string prefixes[2];
+      prefixes[0] = "CCV130_";
+      prefixes[1] = "CCV146_";
+      for(int pi = 0; pi < 2; pi++)
         {
-         string k140 = "CCV130_ST_" + base140 + "_" + IntegerToString(m);
-         if(GlobalVariableCheck(k140))
-            GlobalVariableSet(OutcomeStatKey(mi, m), GlobalVariableGet(k140));
-         for(int sc = 0; sc <= 8; sc++)
+         bool anyMoved = false;
+         for(int m = 0; m <= 6; m++)
            {
-            string k140s = "CCV130_SC_" + base140 + "_" + IntegerToString(sc) + "_" + IntegerToString(m);
-            if(GlobalVariableCheck(k140s))
-               GlobalVariableSet(OutcomeStatKey(mi, m, sc), GlobalVariableGet(k140s));
+            string kOld = prefixes[pi] + "ST_" + baseOld + "_" + IntegerToString(m);
+            if(GlobalVariableCheck(kOld) && GlobalVariableGet(kOld) > 0.0)
+              {
+               GlobalVariableSet(OutcomeStatKey(mi, m), GlobalVariableGet(kOld));
+               anyMoved = true;
+              }
+            for(int sc = 0; sc <= 8; sc++)
+              {
+               string kOldS = prefixes[pi] + "SC_" + baseOld + "_" + IntegerToString(sc) + "_" + IntegerToString(m);
+               if(GlobalVariableCheck(kOldS) && GlobalVariableGet(kOldS) > 0.0)
+                 {
+                  GlobalVariableSet(OutcomeStatKey(mi, m, sc), GlobalVariableGet(kOldS));
+                  anyMoved = true;
+                 }
+              }
            }
+         if(anyMoved) break;
         }
      }
 
@@ -1223,7 +1236,7 @@ void UpdateAndDraw()
 
    int shown = MathMin(n, MaxRows);
 
-   string title = StringFormat("CCompression Scanner (v1.47) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
+   string title = StringFormat("CCompression Scanner (v1.48) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
                                 n - nSpike - nWolfe, nSpike, nWolfe, nHarm, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
@@ -1300,7 +1313,6 @@ void UpdateAndDraw()
                                 transitionRank, inst.symbol, tfName, stateLabel,
                                 inst.score, inst.delta, inst.age);
             
-            // パッチ3：TRANSITION行にも前回結果を表示する
             if(StringLen(g_lastOutcome[idx]) > 0)
                line += " [前回:" + g_lastOutcome[idx] + "]";
 
@@ -1338,6 +1350,15 @@ void UpdateAndDraw()
                  {
                   line += StringFormat("  予兆%3.0f%%%s", rrL.pct, rrL.dir > 0 ? "↑" : (rrL.dir < 0 ? "↓" : ""));
                  }
+              }
+
+            // パッチ8：一覧への次の指標・市場開場時刻の表示追加
+            if(ShowEventInList)
+              {
+               if(evL.minToNext >= 0)
+                  line += StringFormat(" | 次%s %s %d分後", evL.nextCur, evL.nextName, evL.minToNext);
+               else if(EVT_UseSessions && evL.minToSession >= 0)
+                  line += StringFormat(" | 開場%s %d分後", evL.sessionName, evL.minToSession);
               }
            }
         }
@@ -1576,9 +1597,6 @@ void SetDetailLine(const int j, const int total, const string text, const color 
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
   }
 
-//+------------------------------------------------------------------+
-//| 解説パネル描画（パッチ4：累積統計の追加に伴い配列サイズを60行に拡張） |
-//+------------------------------------------------------------------+
 void DrawDetailPanel()
   {
    if(!ShowDetailPanel)
@@ -1588,7 +1606,7 @@ void DrawDetailPanel()
       return;
      }
 
-   string lines[60]; // 拡張配列（Score別内訳を表示しても溢れないよう60行に確保）
+   string lines[60];
    color  clrs[60];
    int    L = 0;
 
@@ -1648,7 +1666,6 @@ void DrawDetailPanel()
                               inst.age, inst.age, tfName);
       clrs[L]  = base; L++;
 
-      // パッチ4：解説パネルへの累積TRANSITION統計の追加
       {
          double tot = OutcomeStatGet(idx, 0);
          double up = OutcomeStatGet(idx, 1);
