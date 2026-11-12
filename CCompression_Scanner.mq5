@@ -6,10 +6,10 @@
 //|  ・圧縮が強い順(TRANSITION優先 → Score降順)にソート                |
 //|  ・行をクリックするとその通貨ペア・時間足にチャートが切り替わる    |
 //|  ・TRANSITION表示保持・急変検知・事後計測・ログ記録完全対応        |
-//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.48)      |
+//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.49)      |
 //+------------------------------------------------------------------+
 #property copyright "CCompression scanner"
-#property version   "1.48"
+#property version   "1.49"
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -124,8 +124,9 @@ double          g_spikeZ[];
 bool            g_suppressed[];
 
 // 画面のON/OFF状態
-bool            g_logOn   = true;
-bool            g_statsOn = true;
+bool            g_logOn      = true;
+bool            g_statsOn    = true;
+int             g_filterMode = 0; // 0=全部 1=発射 2=急変 3=超圧 4=強圧 5=圧縮 (パッチ12)
 
 // 予兆スコア計算用
 int             g_immScore[];
@@ -417,7 +418,7 @@ void LoadSpikeStates()
   }
 
 //+------------------------------------------------------------------+
-//| 累積結果統計                                                      |
+//| 累積結果統計 (CCV148_ キーを維持)                                  |
 //+------------------------------------------------------------------+
 string OutcomeStatKey(const int i, const int metric, const int scoreBucket=-1)
   {
@@ -495,6 +496,39 @@ string TransitionRankingBrief(const int i)
                        total, direction, bias, falseRate, up, down, falseCount, noMove, noDir);
   }
 
+// パッチ11：右端切れ対策・短縮版実績
+string TransitionRankingBriefShort(const int i)
+  {
+   double total = OutcomeStatGet(i, 0);
+   double up = OutcomeStatGet(i, 1);
+   double down = OutcomeStatGet(i, 2);
+   double falseCount = OutcomeStatGet(i, 3);
+   double falseRate = (total > 0.0 ? falseCount / total * 100.0 : 0.0);
+   return StringFormat("過%.0f 上%.0f下%.0f だま%.0f%%", total, up, down, falseRate);
+  }
+
+// パッチ12-3：フィルター判定関数
+bool PassFilter(const int kind, const CCOMP_STATE dispState)
+  {
+   if(g_filterMode == 0) return true;
+   if(g_filterMode == 1) return (kind == 0 && dispState == CCOMP_TRANSITION);
+   if(g_filterMode == 2) return (kind == 1);
+   if(g_filterMode == 3) return (kind == 0 && dispState == CCOMP_TIGHT_COMPRESSION);
+   if(g_filterMode == 4) return (kind == 0 && dispState == CCOMP_STRONG_COMPRESSION);
+   if(g_filterMode == 5) return (kind == 0 && dispState == CCOMP_COMPRESSION);
+   return true;
+  }
+
+string FilterModeText()
+  {
+   if(g_filterMode == 1) return "表示: 発射のみ";
+   if(g_filterMode == 2) return "表示: 急変のみ";
+   if(g_filterMode == 3) return "表示: 超圧のみ";
+   if(g_filterMode == 4) return "表示: 強圧のみ";
+   if(g_filterMode == 5) return "表示: 圧縮のみ";
+   return "表示: 全部";
+  }
+
 void VerificationUpdateTransition(const int i)
   {
    if(!InpEnableOutcomeJudge || !g_verification[i].active) return;
@@ -551,7 +585,7 @@ void JudgeAndFinishTransition(const int i)
       g_lastOutcome[i] = "判定保留";
       g_lastOutcomeTime[i] = TimeCurrent();
       g_verification[i].active = false;
-      SaveOutcomeState(i); // パッチ7：判定保留も切替後に残す
+      SaveOutcomeState(i);
       return;
      }
 
@@ -690,6 +724,8 @@ int OnInit()
    g_logOn   = GlobalVariableCheck("CCOMP_UI_LOG")   ? (GlobalVariableGet("CCOMP_UI_LOG")   > 0.5) : SLG_Enable;
    g_statsOn = GlobalVariableCheck("CCOMP_UI_STATS") ? (GlobalVariableGet("CCOMP_UI_STATS") > 0.5) : ShowStatsPanel;
    g_wickHL_On = GlobalVariableCheck("CCOMP_UI_WICKHL") ? (GlobalVariableGet("CCOMP_UI_WICKHL") > 0.5) : true;
+   g_filterMode = GlobalVariableCheck("CCOMP_UI_FILTER") ? (int)GlobalVariableGet("CCOMP_UI_FILTER") : 0; // パッチ12-2
+
    if(GlobalVariableCheck("CCOMP_UI_HARMDRAW"))
       g_harmDrawMode = (HARM_DRAW_MODE)(int)GlobalVariableGet("CCOMP_UI_HARMDRAW");
    else
@@ -699,39 +735,39 @@ int OnInit()
    LoadTransitionHoldStates();
    LoadLastOutcomes();
 
-// パッチ9：CCV147 / CCV146 / CCV130 → CCV148 へ移行（新しい順に見る）
-for(int mi = 0; mi < g_scanTotal; mi++)
-  {
-   if(OutcomeStatGet(mi, 0) > 0.0) continue;
-   string baseOld = g_scan[mi].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[mi].tf));
-   string prefixes[3];
-   prefixes[0] = "CCV147_"; // ← 追加：直前のv1.47を最優先
-   prefixes[1] = "CCV146_";
-   prefixes[2] = "CCV130_";
-   for(int pi = 0; pi < 3; pi++)
+   // パッチ9：CCV147 / CCV146 / CCV130 → CCV148 へ移行（CCV148_は変えない）
+   for(int mi = 0; mi < g_scanTotal; mi++)
      {
-      bool anyMoved = false;
-      for(int m = 0; m <= 6; m++)
+      if(OutcomeStatGet(mi, 0) > 0.0) continue;
+      string baseOld = g_scan[mi].symbol + "_" + IntegerToString(PeriodSeconds(g_scan[mi].tf));
+      string prefixes[3];
+      prefixes[0] = "CCV147_";
+      prefixes[1] = "CCV146_";
+      prefixes[2] = "CCV130_";
+      for(int pi = 0; pi < 3; pi++)
         {
-         string kOld = prefixes[pi] + "ST_" + baseOld + "_" + IntegerToString(m);
-         if(GlobalVariableCheck(kOld) && GlobalVariableGet(kOld) > 0.0)
+         bool anyMoved = false;
+         for(int m = 0; m <= 6; m++)
            {
-            GlobalVariableSet(OutcomeStatKey(mi, m), GlobalVariableGet(kOld));
-            anyMoved = true;
-           }
-         for(int sc = 0; sc <= 8; sc++)
-           {
-            string kOldS = prefixes[pi] + "SC_" + baseOld + "_" + IntegerToString(sc) + "_" + IntegerToString(m);
-            if(GlobalVariableCheck(kOldS) && GlobalVariableGet(kOldS) > 0.0)
+            string kOld = prefixes[pi] + "ST_" + baseOld + "_" + IntegerToString(m);
+            if(GlobalVariableCheck(kOld) && GlobalVariableGet(kOld) > 0.0)
               {
-               GlobalVariableSet(OutcomeStatKey(mi, m, sc), GlobalVariableGet(kOldS));
+               GlobalVariableSet(OutcomeStatKey(mi, m), GlobalVariableGet(kOld));
                anyMoved = true;
               }
+            for(int sc = 0; sc <= 8; sc++)
+              {
+               string kOldS = prefixes[pi] + "SC_" + baseOld + "_" + IntegerToString(sc) + "_" + IntegerToString(m);
+               if(GlobalVariableCheck(kOldS) && GlobalVariableGet(kOldS) > 0.0)
+                 {
+                  GlobalVariableSet(OutcomeStatKey(mi, m, sc), GlobalVariableGet(kOldS));
+                  anyMoved = true;
+                 }
+              }
            }
+         if(anyMoved) break;
         }
-      if(anyMoved) break;
      }
-  }
 
    if(UseWickDetector && WickLookbackBars > 0)
      {
@@ -1169,6 +1205,8 @@ void UpdateAndDraw()
 
       if(UseSpikeOverride && nowT < g_spikeUntil[i])
         {
+         // パッチ12-4：急変フィルター
+         if(!PassFilter(1, CCOMP_NORMAL)) continue;
          candIdx[n]  = i;
          candKind[n] = 1;
          candKey[n]  = 200.0 + MathMin(g_spikeRatio[i], 50.0);
@@ -1195,6 +1233,10 @@ void UpdateAndDraw()
            }
          continue;
         }
+
+      // パッチ12-4：圧縮・発射フィルター
+      if(!PassFilter(0, dispState)) continue;
+
       candIdx[n]  = i;
       candKind[n] = 0;
       double baseKey = (double)g_scan[i].score;
@@ -1237,7 +1279,7 @@ void UpdateAndDraw()
 
    int shown = MathMin(n, MaxRows);
 
-   string title = StringFormat("CCompression Scanner (v1.48) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
+   string title = StringFormat("CCompression Scanner (v1.49) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
                                 n - nSpike - nWolfe, nSpike, nWolfe, nHarm, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
@@ -1299,6 +1341,7 @@ void UpdateAndDraw()
                   transitionRank++;
               }
 
+            // パッチ10：発射後○本 → 発射○ に短縮、パディング幅を6に縮小
             string stateLabel;
             if(inst.state == CCOMP_TRANSITION)
                stateLabel = "発射中";
@@ -1306,24 +1349,25 @@ void UpdateAndDraw()
               {
                int elapsed = (MathMax(1, InpTransitionDisplayHoldBars) + 1) - g_transitionHoldRemaining[idx];
                elapsed = MathMax(1, MathMin(InpTransitionDisplayHoldBars, elapsed));
-               stateLabel = StringFormat("発射後%d本", elapsed);
+               stateLabel = StringFormat("発射%d", elapsed);
               }
-            stateLabel = PadToDisplayWidth(stateLabel, 10);
+            stateLabel = PadToDisplayWidth(stateLabel, 6);
 
             line = StringFormat("#%02d %-8s %-4s %s Sc%d Δ%+d Age%d",
                                 transitionRank, inst.symbol, tfName, stateLabel,
                                 inst.score, inst.delta, inst.age);
             
+            // パッチ11：[前回:...] → [...] 短縮 ＆ 過去実績を短縮版に置き換え
             if(StringLen(g_lastOutcome[idx]) > 0)
-               line += " [前回:" + g_lastOutcome[idx] + "]";
+               line += " [" + g_lastOutcome[idx] + "]";
 
-            string brief = TransitionRankingBrief(idx);
-            if(StringLen(brief) > 0)
-               line += " | " + brief;
+            string briefShort = TransitionRankingBriefShort(idx);
+            if(StringLen(briefShort) > 0)
+               line += " | " + briefShort;
            }
          else
            {
-            string outcomeStr = (g_lastOutcome[idx] != "" ? " [前回:" + g_lastOutcome[idx] + "]" : "");
+            string outcomeStr = (g_lastOutcome[idx] != "" ? " [" + g_lastOutcome[idx] + "]" : "");
             line = StringFormat("%-9s %-4s %-6s Sc%d Δ%+d Age%d%s",
                inst.symbol, tfName, CCOMP_StateShortText(dispState), inst.score, inst.delta, inst.age, outcomeStr);
            }
@@ -1353,13 +1397,13 @@ void UpdateAndDraw()
                  }
               }
 
-            // パッチ8：一覧への次の指標・市場開場時刻の表示追加
+            // パッチ11：指標名を削って通貨だけに短縮
             if(ShowEventInList)
               {
                if(evL.minToNext >= 0)
-                  line += StringFormat(" | 次%s %s %d分後", evL.nextCur, evL.nextName, evL.minToNext);
+                  line += StringFormat(" | 次%s %d分", evL.nextCur, evL.minToNext);
                else if(EVT_UseSessions && evL.minToSession >= 0)
-                  line += StringFormat(" | 開場%s %d分後", evL.sessionName, evL.minToSession);
+                  line += StringFormat(" | 開場%d分", evL.minToSession);
               }
            }
         }
@@ -1446,6 +1490,17 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          ObjectsDeleteAll(0, "CCOMP_WickHL_");
       ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       ChartRedraw(0);
+      return;
+     }
+
+   // パッチ12-6：フィルターボタンのクリック処理
+   if(sparam == "CCOMP_Scan_BtnFilter")
+     {
+      g_filterMode = (g_filterMode + 1) % 6; // 0→1→2→3→4→5→0
+      GlobalVariableSet("CCOMP_UI_FILTER", (double)g_filterMode);
+      DrawStatsPanel();
+      ChartRedraw(0);
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       return;
      }
 
@@ -1934,13 +1989,17 @@ void DrawUiButton(const string name, const int x, const string text, const color
 
 void DrawStatsPanel()
   {
-   DrawUiButton("CCOMP_Scan_BtnStats", StatsX,
+   // パッチ12-5：フィルターボタンを右上ボタン群の先頭に追加
+   DrawUiButton("CCOMP_Scan_BtnFilter", StatsX,
+                FilterModeText(),
+                g_filterMode == 0 ? C'40,70,110' : C'110,70,40');
+   DrawUiButton("CCOMP_Scan_BtnStats", StatsX + 132,
                 g_statsOn ? "検証パネル: 表示" : "検証パネル: 非表示",
                 g_statsOn ? C'40,90,40' : C'70,70,70');
-   DrawUiButton("CCOMP_Scan_BtnLog", StatsX + 132,
+   DrawUiButton("CCOMP_Scan_BtnLog", StatsX + 264,
                 g_logOn ? "ログ記録: ON" : "ログ記録: OFF",
                 g_logOn ? C'40,90,40' : C'110,40,40');
-   DrawUiButton("CCOMP_Scan_BtnReport", StatsX + 264, "レポート出力", C'40,70,110');
+   DrawUiButton("CCOMP_Scan_BtnReport", StatsX + 396, "レポート出力", C'40,70,110');
    if(HARM_Enable)
      {
       string harmBtnText;
@@ -1953,7 +2012,7 @@ void DrawStatsPanel()
          case HARM_DRAW_FAINT_SHAPE: harmBtnText = "ハーモニック: 図形薄+文字"; harmBtnClr = C'90,40,90';  break;
          default:                    harmBtnText = "ハーモニック: ?";           harmBtnClr = C'70,70,70';  break;
         }
-      DrawUiButton("CCOMP_Harm_BtnMode", StatsX + 396, harmBtnText, harmBtnClr);
+      DrawUiButton("CCOMP_Harm_BtnMode", StatsX + 528, harmBtnText, harmBtnClr);
      }
 
    if(!g_statsOn)
