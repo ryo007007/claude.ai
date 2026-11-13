@@ -6,10 +6,10 @@
 //|  ・圧縮が強い順(TRANSITION優先 → Score降順)にソート                |
 //|  ・行をクリックするとその通貨ペア・時間足にチャートが切り替わる    |
 //|  ・TRANSITION表示保持・急変検知・事後計測・ログ記録完全対応        |
-//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.51)      |
+//|  ・TRANSITIONランキング＋累積実績統計＋だまし判定対応 (v1.52)      |
 //+------------------------------------------------------------------+
 #property copyright "CCompression scanner"
-#property version   "1.51"
+#property version   "1.52"
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -77,12 +77,18 @@ input bool ShowCompression       = true; // COMPRESSION以上を表示
 input bool ShowOnlyStrongOrAbove = false; // trueならSTRONG COMPRESSION以上のみ表示
 input bool ShowTransition        = true; // TRANSITION(圧縮解除中)を表示
 
-input group "=== EMAアライメント(押し目/戻り) ==="
+input group "=== EMAアライメントv2.0(押し目/戻り) ==="
 input bool InpEMAAlignEnable    = true;  // EMAアライメントを使う
 input int  InpEMAAlignPeriod    = 200;   // EMA期間
-input int  InpEMAAlignSlopeBars = 5;     // 何本前と比較して向きを決めるか
-input bool InpEMAAlignUseD1     = false; // 日足200EMAも条件に入れる（デモ検証中はfalse推奨）[cite: 9]
-input bool InpEMAAlignUseH4     = true;  // 4時間足200EMAも条件に入れる（falseならH1のみで判定）[cite: 9]
+input int  InpEMAAlignSlopeBarsShort = 10; // 短期スロープ: 何本前と比較 (v2.0)
+input int  InpEMAAlignSlopeBarsMed   = 20; // 中期スロープ: 何本前と比較 (v2.0)
+input int  InpEMAAlignSlopeBarsLong  = 30; // 長期スロープ: 何本前と比較 (v2.0)
+input bool InpEMAAlignUseD1     = false; // 日足200EMAも条件に入れる
+input bool InpEMAAlignUseH4     = true;  // 4時間足200EMAも条件に入れる
+input bool InpEMAAlignUseM15    = true;  // 15分足200EMAもアライメントに使う (v2.0)
+input bool InpEMAAlignShowEQS   = true;  // 行表示にEQS(エントリー品質スコア)を表示 (v2.0)
+input bool InpEMAAlignShowZone  = true;  // 行表示にゾーンラベルを表示 (v2.0)
+input bool InpEMAAlignShowDivergence = true; // ダイバージェンス検出を表示 (v2.0)
 
 input group "=== 急変検知との連携 ==="
 input bool UseSpikeOverride  = true;  // 急変を検知したら圧縮表示を解除して「急変」として表示する
@@ -1197,11 +1203,14 @@ void UpdateAndDraw()
         }
      }
 
-   // パッチEMA-1：EMAアライメントは symbol ごとに1回だけ計算（UseH4 引数を追加）
+   // EMA v2.0: symbolごとに1回計算（3スロープ期間 + M15対応）
    if(InpEMAAlignEnable)
      {
       for(int si = 0; si < g_symbolCount; si++)
-         EMA_AlignCompute(g_symbols[si], InpEMAAlignPeriod, InpEMAAlignSlopeBars, InpEMAAlignUseD1, InpEMAAlignUseH4, g_emaAlign[si]);
+         EMA_AlignCompute(g_symbols[si], InpEMAAlignPeriod,
+                          InpEMAAlignSlopeBarsShort, InpEMAAlignSlopeBarsMed, InpEMAAlignSlopeBarsLong,
+                          InpEMAAlignUseD1, InpEMAAlignUseH4, InpEMAAlignUseM15,
+                          g_emaAlign[si]);
      }
 
    int    candIdx[];
@@ -1293,7 +1302,7 @@ void UpdateAndDraw()
 
    int shown = MathMin(n, MaxRows);
 
-   string title = StringFormat("CCompression Scanner (v1.51) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
+   string title = StringFormat("CCompression Scanner (v1.52) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
                                 n - nSpike - nWolfe, nSpike, nWolfe, nHarm, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
@@ -1404,21 +1413,36 @@ void UpdateAndDraw()
            }
         }
 
-      // パッチEMA-2改：圧縮・強圧・超圧・発射・急変の5つ全てにEMAサインを付ける
+      // EMA v2.0: 圧縮・強圧・超圧・発射・急変の全行にEMAサインを付ける
       if(InpEMAAlignEnable && (candKind[r] == 0 || candKind[r] == 1))
         {
          int siEMA = idx / g_tfCount;
          if(g_emaAlign[siEMA].ready && g_emaAlign[siEMA].dir != 0)
            {
-            string emaMark = (g_emaAlign[siEMA].dir > 0 ? " ◎押し目" : " ◎戻り");
+            string emaMark;
+            if(g_emaAlign[siEMA].dir > 0)
+               emaMark = " ◎押し目";
+            else
+               emaMark = " ◎戻り";
+           
+            // ゾーンラベル追加 (v2.0)
+            if(InpEMAAlignShowZone && StringLen(g_emaAlign[siEMA].zoneLabel) > 0)
+               emaMark += "(" + g_emaAlign[siEMA].zoneLabel + ")";
+           
+            // EQSスコア追加 (v2.0)
+            if(InpEMAAlignShowEQS && g_emaAlign[siEMA].eqs > 0)
+               emaMark += StringFormat("[EQS%d]", g_emaAlign[siEMA].eqs);
+           
+            // ダイバージェンス追加 (v2.0)
+            if(InpEMAAlignShowDivergence && g_emaAlign[siEMA].divergence != 0)
+               emaMark += (g_emaAlign[siEMA].divergence > 0 ? "↗" : "↘");
+           
             if(candKind[r] == 1)
               {
-               // 急変行は末尾に | がないのでそのまま付ける
                line += emaMark;
               }
             else if(StringSubstr(line, StringLen(line) - 2) == " |")
               {
-               // 圧縮・強圧・超圧・発射行は | の内側に挿入
                line = StringSubstr(line, 0, StringLen(line) - 2) + emaMark + " |";
               }
             else
@@ -1791,7 +1815,7 @@ void DrawDetailPanel()
          clrs[L]  = base; L++;
         }
 
-      // パッチEMA-3：解説パネルにEMAアライメントの内訳（H4判定外対応）
+      // EMA v2.0: 解説パネルに詳細なアライメント情報を表示
       if(InpEMAAlignEnable)
         {
          int siD = -1;
@@ -1800,18 +1824,62 @@ void DrawDetailPanel()
          if(siD >= 0 && g_emaAlign[siD].ready)
            {
             EMA_ALIGN_Result ea = g_emaAlign[siD];
+            
+            // --- 基本情報ライン ---
             string h4Txt = !InpEMAAlignUseH4 ? "判定外" : (ea.slopeH4 > 0 ? "上向き" : (ea.slopeH4 < 0 ? "下向き" : "横ばい"));
             string h1Txt = (ea.slopeH1 > 0 ? "上向き" : (ea.slopeH1 < 0 ? "下向き" : "横ばい"));
             string posTxt = (ea.pricePos > 0 ? "H1 EMAより上" : (ea.pricePos < 0 ? "H1 EMAより下" : "H1 EMA付近"));
             string alignTxt = (ea.dir > 0 ? " → 押し目条件成立" : (ea.dir < 0 ? " → 戻り条件成立" : " → 条件なし"));
-            lines[L] = StringFormat("  [EMAアライメント] H4 %s / H1 %s / 価格は%s%s",
+            lines[L] = StringFormat("  [EMAアライメント v2.0] H4 %s / H1 %s / 価格は%s%s",
                                     h4Txt, h1Txt, posTxt, alignTxt);
             clrs[L] = (ea.dir != 0 ? CCOMP_StateColor(inst.state) : base); L++;
+            
+            // --- v2.0 スコア詳細 ---
+            if(ea.dir != 0)
+              {
+               string divTxt = "";
+               if(ea.divergence > 0) divTxt = " ダイバージェンス(買い)↗";
+               else if(ea.divergence < 0) divTxt = " ダイバージェンス(売り)↘";
+               
+               lines[L] = StringFormat("    トレンド強度:%d/100 | 深さスコア:%d/100 | アライメント:%d/100 | EQS:%d/100%s",
+                                       ea.trendStrength, ea.depthScore, ea.alignmentScore, ea.eqs, divTxt);
+               clrs[L] = (ea.eqs >= 70 ? clrAqua : (ea.eqs >= 40 ? clrYellow : base)); L++;
+               
+               // ゾーンラベルと動的ATR
+               lines[L] = StringFormat("    ゾーン:%s | 動的ATR倍率:%.2f | H4 ATR:%.5f | 距離:%.5f",
+                                       ea.zoneLabel, ea.dynamicATRMult, ea.atrH4, ea.distH4);
+               clrs[L] = base; L++;
+              }
+            
+            // --- 日足フィルター ---
             if(InpEMAAlignUseD1)
               {
                string d1Txt = (ea.slopeD1 > 0 ? "上向き" : (ea.slopeD1 < 0 ? "下向き" : "横ばい"));
-               lines[L] = StringFormat("  [EMA200 日足] %s（H4/H1と揃っていないと条件なし）", d1Txt);
+               bool d1Filter = (ea.slopeD1 != 0 && ea.slopeD1 != (InpEMAAlignUseH4 ? ea.slopeH4 : ea.slopeH1));
+               lines[L] = StringFormat("    [EMA200 日足] %s%s", d1Txt,
+                                       d1Filter ? " → トレンド方向不一致でフィルタ適用中" : "");
+               clrs[L] = d1Filter ? clrGray : base; L++;
+              }
+            
+            // --- M15アライメント（UseM15時） ---
+            if(InpEMAAlignUseM15)
+              {
+               string m15Txt = (ea.slopeM15 > 0 ? "上向き" : (ea.slopeM15 < 0 ? "下向き" : "横ばい"));
+               string m15Pos = (ea.pricePosM15 > 0 ? "M15 EMAより上" : (ea.pricePosM15 < 0 ? "M15 EMAより下" : "M15 EMA付近"));
+               lines[L] = StringFormat("    [EMA200 M15] %s / 価格は%s", m15Txt, m15Pos);
                clrs[L] = base; L++;
+              }
+            
+            // --- 長期トレンド確認 ---
+            if(InpEMAAlignUseH4)
+              {
+               string h4MedTxt = (ea.slopeH4Med > 0 ? "上向き" : (ea.slopeH4Med < 0 ? "下向き" : "横ばい"));
+               string h4LongTxt = (ea.slopeH4Long > 0 ? "上向き" : (ea.slopeH4Long < 0 ? "下向き" : "横ばい"));
+               bool trendAlign = (ea.slopeH4 == ea.slopeH4Med && ea.slopeH4 == ea.slopeH4Long && ea.slopeH4 != 0);
+               lines[L] = StringFormat("    [H4トレンド確認] 短期:%s / 中期:%s / 長期:%s%s",
+                                       h4Txt, h4MedTxt, h4LongTxt,
+                                       trendAlign ? " → 3期間揃い(強トレンド)" : "");
+               clrs[L] = trendAlign ? clrAqua : base; L++;
               }
            }
         }
