@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| EMAAlignmentEngine_v2.1.mqh                                      |
+//| EMAAlignmentEngine.mqh                                           |
 //| H4/H1/M15 200EMA + 圧縮の押し目 / 戻り判定 (緩和版)               |
 //|                                                                    |
 //|  v2.1 変更点 (v2.0→v2.1):                                         |
@@ -242,8 +242,6 @@ bool EMA_RelaxedAlign(const double h1Now, const double h4Now, const double atrH4
    if(atrH4 <= 0.0) return true;
    double emaDiff = h1Now - h4Now;
    double threshold = atrH4 * 1.5;
-   // 買い(dir>0): H1 > H4 が理想だが、近ければOK
-   // 売り(dir<0): H1 < H4 が理想だが、近ければOK
    if(dir > 0) return (emaDiff > -threshold); // H1がH4より少し下でも許容
    if(dir < 0) return (emaDiff < threshold);  // H1がH4より少し上でも許容
    return false;
@@ -365,8 +363,8 @@ bool EMA_AlignCompute(const string symbol, const int emaPeriod,
      }
 
    // --- v2.1 緩和条件 ---
-   // 買い（押し目）
-   bool buyTrend = EMA_RelaxedTrend(r.slopeH4, r.slopeH4Med, r.slopeH4Long);
+   // 買い（押し目）: 上向きチェックを追加
+   bool buyTrend = (r.slopeH4 > 0) && EMA_RelaxedTrend(r.slopeH4, r.slopeH4Med, r.slopeH4Long);
    bool buyAlign = EMA_RelaxedAlign(h1Now, h4Now, atrH4, 1);
    bool buyZone  = (r.pricePosH4 >= 0 && r.pricePos <= 0); // v2.1: >= と <= で境界許容
    bool buyDist  = (atrH4 > 0.0 && r.distH4 < atrH4 * 2.0); // v2.1: 2.0倍に緩和

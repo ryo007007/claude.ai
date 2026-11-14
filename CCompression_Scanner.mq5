@@ -923,6 +923,16 @@ void UpdateAndDraw()
         }
      }
 
+   // EMA v2.0: symbolごとに1回計算（3スロープ期間 + M15対応）をここで実行
+   if(InpEMAAlignEnable)
+     {
+      for(int si = 0; si < g_symbolCount; si++)
+         EMA_AlignCompute(g_symbols[si], InpEMAAlignPeriod,
+                          InpEMAAlignSlopeBarsShort, InpEMAAlignSlopeBarsMed, InpEMAAlignSlopeBarsLong,
+                          InpEMAAlignUseD1, InpEMAAlignUseH4, InpEMAAlignUseM15,
+                          g_emaAlign[si]);
+     }
+
    EVT_Refresh();
    REL_Update();
 
@@ -1039,6 +1049,14 @@ void UpdateAndDraw()
             feat += ";" + TDS_Feat(g_td[i]);
          if(ICH_Enable && g_ich[i].ready)
             feat += ";" + ICH_Feat(g_ich[i]);
+         
+         // 第1段階: EMAアライメント情報を追加（最新の計算結果が即座に反映される）
+         if(InpEMAAlignEnable)
+           {
+            int siEMA = i / g_tfCount;
+            if(siEMA >= 0 && siEMA < g_symbolCount && g_emaAlign[siEMA].ready)
+               feat += ";" + EMA_AlignFeat(g_emaAlign[siEMA]);
+           }
 
          SLG_LogEvent("TRANSITION", g_scan[i].symbol, g_scan[i].tf, closeT, px, atrAbs, feat);
         }
@@ -1139,6 +1157,15 @@ void UpdateAndDraw()
 
                double px = SymbolInfoDouble(g_scan[i].symbol, SYMBOL_BID);
                string featS = StringFormat("dir=%s;atr_ratio=%.2f;z_robust=%.2f", isUp ? "up" : "down", ratio, z);
+               
+               // 第1段階: EMAアライメント情報を追加（最新の計算結果が即座に反映される）
+               if(InpEMAAlignEnable)
+                 {
+                  int siEMA = i / g_tfCount;
+                  if(siEMA >= 0 && siEMA < g_symbolCount && g_emaAlign[siEMA].ready)
+                     featS += ";" + EMA_AlignFeat(g_emaAlign[siEMA]);
+                 }
+               
                if(SLG_IsOn())
                   SLG_LogEvent("SPIKE", g_scan[i].symbol, g_scan[i].tf, nowT, px, sp.atrAvg, featS);
               }
@@ -1201,16 +1228,6 @@ void UpdateAndDraw()
                                       wick.wickRatio * 100, wick.multiplier));
            }
         }
-     }
-
-   // EMA v2.0: symbolごとに1回計算（3スロープ期間 + M15対応）
-   if(InpEMAAlignEnable)
-     {
-      for(int si = 0; si < g_symbolCount; si++)
-         EMA_AlignCompute(g_symbols[si], InpEMAAlignPeriod,
-                          InpEMAAlignSlopeBarsShort, InpEMAAlignSlopeBarsMed, InpEMAAlignSlopeBarsLong,
-                          InpEMAAlignUseD1, InpEMAAlignUseH4, InpEMAAlignUseM15,
-                          g_emaAlign[si]);
      }
 
    int    candIdx[];
