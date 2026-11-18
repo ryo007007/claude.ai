@@ -13,6 +13,7 @@
 #property indicator_chart_window
 #property indicator_plots 0
 
+//---------------- ① 首先：#include をすべて上に集約 ----------------
 #include "MarketEngines/CCompression.mqh"        // 圧縮検出エンジン
 #include "MarketEngines/SuddenMoveDetector.mqh"  // 急変検知エンジン
 #include "MarketEngines/SignalAlert.mqh"         // アラートエンジン
@@ -25,6 +26,11 @@
 #include "MarketEngines/WickDetector.mqh"        // 髭検知エンジン（追加）
 #include "MarketEngines/HarmonicPatternEngine.mqh" // ハーモニックパターンエンジン（追加）
 #include "MarketEngines/EMAAlignmentEngine.mqh" // EMAアライメント（押し目/戻り）
+#include "MarketEngines/VolumeEngine.mqh"          // 出来高エンジン
+#include "MarketEngines/TTMSqueezeEngine.mqh"      // TTM Squeezeエンジン（追加）
+#include "MarketEngines/AIPredictorEngine.mqh"
+#include "MarketEngines/AIPredictorTrainer.mqh"
+#include "MarketEngines/AI_Integration_Patch.mqh"
 
 //---------------- 入力パラメータ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
@@ -116,7 +122,7 @@ input group "=== 髭検知 強調クリアボタン位置 ==="
 input int    WickBtnX = 100;  // ボタンX（右下隅からの距離。大きいほど左）
 input int    WickBtnY = 10;   // ボタンY（右下隅からの距離。大きいほど上）
 
-//---------------- グローバル ----------------
+//---------------- ② その後にグローバル変数（型定義はすべてインクルード済み） ----------------
 string          g_symbols[];
 int             g_symbolCount = 0;
 ENUM_TIMEFRAMES g_tfList[];
@@ -147,7 +153,7 @@ int             g_immScore[];
 bool            g_immAct[];
 bool            g_immUp[];
 
-// TDシーケンシャル、ウォルフ、一目、ハーモニック結果
+// TDシーケンシャル、ウォルフ、一目、ハーモニック、出来高、TTM結果
 TDS_Result      g_td[];
 datetime        g_tdBar[];
 WLF_Result      g_wlf[];
@@ -156,8 +162,10 @@ ICH_Result      g_ich[];
 datetime        g_ichBar[];
 HARM_Result     g_harm[];
 datetime        g_harmBar[];
-HARM_DRAW_MODE  g_harmDrawMode = HARM_DRAW_FULL;
-EMA_ALIGN_Result g_emaAlign[]; // symbolごとのEMAアライメント結果
+VOL_Result      g_vol[];
+TTM_Result      g_ttm[];                     // TTM Squeeze結果 (追加)
+HARM_DRAW_MODE  g_harmDrawMode = HARM_DRAW_FULL; // ハーモニック 描画モード
+EMA_ALIGN_Result g_emaAlign[];                   // symbolごとのEMAアライメント結果
 
 //--- TRANSITION表示保持・事後計測用
 int             g_transitionHoldRemaining[];
@@ -684,6 +692,8 @@ int OnInit()
    ArrayResize(g_ichBar, g_scanTotal);
    ArrayResize(g_harm,   g_scanTotal);
    ArrayResize(g_harmBar, g_scanTotal);
+   ArrayResize(g_vol,    g_scanTotal); // 出来高配列の初期化
+   ArrayResize(g_ttm,    g_scanTotal); // TTM Squeeze配列の初期化 (追加)
    ArrayResize(g_baseBar, g_scanTotal);
 
    ArrayResize(g_transitionHoldRemaining, g_scanTotal);
@@ -826,6 +836,7 @@ int OnInit()
      }
 
    EventSetTimer(MathMax(1, RefreshSeconds));
+   AI_Init();
    return(INIT_SUCCEEDED);
   }
 
@@ -840,6 +851,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "CCOMP_WickHL_");
    WLF_ClearDrawing();
    HARM_ClearDrawing();
+   AI_Deinit();
    ChartRedraw(0);
   }
 
@@ -966,6 +978,20 @@ void UpdateAndDraw()
         }
      }
 
+   // 出来高エンジンの計算ループ追加
+   for(int i = 0; i < g_scanTotal; i++)
+     {
+      if(!g_scan[i].ready) continue;
+      VOL_Compute(g_scan[i].symbol, g_scan[i].tf, g_vol[i]);
+     }
+
+   // TTM Squeezeエンジンの計算ループ追加 (追加)
+   for(int i = 0; i < g_scanTotal; i++)
+     {
+      if(!g_scan[i].ready) continue;
+      TTM_Compute(g_scan[i].symbol, g_scan[i].tf, g_ttm[i]);
+     }
+
    if(WLF_Enable)
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -1049,6 +1075,14 @@ void UpdateAndDraw()
             feat += ";" + TDS_Feat(g_td[i]);
          if(ICH_Enable && g_ich[i].ready)
             feat += ";" + ICH_Feat(g_ich[i]);
+         
+         // SignalLogger の特徴量に追加
+         if(StringLen(feat) > 0) feat += ";";
+         feat += VOL_Feat(g_vol[i]);
+         
+         // TTM特徴量を追加 (追加)
+         if(StringLen(feat) > 0) feat += ";";
+         feat += TTM_Feat(g_ttm[i]);
          
          // 第1段階: EMAアライメント情報を追加（最新の計算結果が即座に反映される）
          if(InpEMAAlignEnable)
@@ -1430,6 +1464,14 @@ void UpdateAndDraw()
            }
         }
 
+      // 一覧の行に出来高情報を表示
+      if(VOL_ShowInList)
+         line += VOL_Text(g_vol[idx]);
+
+      // 一覧の行にTTM Squeeze情報を表示 (追加)
+      if(TTM_ShowInList)
+         line += TTM_Text(g_ttm[idx]);
+
       // EMA v2.0: 圧縮・強圧・超圧・発射・急変の全行にEMAサインを付ける
       if(InpEMAAlignEnable && (candKind[r] == 0 || candKind[r] == 1))
         {
@@ -1467,6 +1509,10 @@ void UpdateAndDraw()
            }
         }
 
+      // AI予測を追加
+      string feat = StringFormat("score=%d;delta=%d", inst.score, inst.delta);
+      AI_UpdateRow(idx, candKind[r], line, rowClr, feat);
+
       DrawRow(r, line, rowClr);
 
       g_rowSymbol[r] = inst.symbol;
@@ -1503,6 +1549,8 @@ void UpdateAndDraw()
    SAL_Flush();
    SLG_EvaluatePending();
    SLG_AutoReport();
+
+   AI_UpdatePanel();
 
    ChartRedraw(0);
   }
@@ -1814,6 +1862,27 @@ void DrawDetailPanel()
                               inst.isNR ? "はい" : "いいえ");
       clrs[L]  = base; L++;
 
+      // 詳細パネルに出来高情報を表示
+      if(g_vol[idx].ready)
+        {
+         lines[L] = StringFormat("  出来高: %s %.2f (平均%.0f)",
+                                 g_vol[idx].state > 0 ? "Vol↑" :
+                                 g_vol[idx].state < 0 ? "Vol↓" : "Vol→",
+                                 g_vol[idx].ratio, g_vol[idx].volAvg);
+         clrs[L]  = base; L++;
+        }
+
+      // 詳細パネルにTTM Squeeze情報を表示 (追加)
+      if(g_ttm[idx].ready)
+        {
+         lines[L] = StringFormat("  TTM: %s Mom%s %.5f",
+                                 g_ttm[idx].squeeze ? "SQZ中" :
+                                 g_ttm[idx].released ? "SQZ解除" : "SQZなし",
+                                 g_ttm[idx].momDir > 0 ? "↑" : (g_ttm[idx].momDir < 0 ? "↓" : "→"),
+                                 g_ttm[idx].momentum);
+         clrs[L]  = base; L++;
+        }
+
       REL_Result rrD;
       EVT_Info   evD;
       ComputeRowImminence(idx, rrD, evD);
@@ -2082,6 +2151,22 @@ void DrawDetailPanel()
         {
          lines[L] = "  急変により圧縮表示を解除中（圧縮がNORMALに戻るまで一覧には出ません）";
          clrs[L]  = clrGray; L++;
+        }
+     }
+
+   //--- AI予測 (2行表示)
+   if(AI_Enable)
+     {
+      AI_Prediction aiPred;
+      if(AI_GetCurrentPrediction(aiPred))
+        {
+         lines[L] = StringFormat("  AI %s %.0f%%", AI_DirMark(aiPred.direction), aiPred.confidence);
+         clrs[L]  = (aiPred.confidence >= AI_HighConfidence) ? (aiPred.direction > 0 ? clrDodgerBlue : (aiPred.direction < 0 ? clrHotPink : clrWhite)) : clrWhite;
+         L++;
+
+         lines[L] = StringFormat("  根拠: %s", aiPred.rationale);
+         clrs[L]  = clrWhite;
+         L++;
         }
      }
 
