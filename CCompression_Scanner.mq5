@@ -28,11 +28,11 @@
 #include "MarketEngines/EMAAlignmentEngine.mqh" // EMAアライメント（押し目/戻り）
 #include "MarketEngines/VolumeEngine.mqh"          // 出来高エンジン
 #include "MarketEngines/TTMSqueezeEngine.mqh"      // TTM Squeezeエンジン（追加）
+#include "MarketEngines/RSIDivergenceEngine.mqh"     // RSIダイバージェンスエンジン（追加）
 #include "MarketEngines/AIPredictorEngine.mqh"
 #include "MarketEngines/AIPredictorTrainer.mqh"
-#include "MarketEngines/AI_Integration_Patch.mqh"
 
-//---------------- 入力パラメータ ----------------
+//---------------- 入力パラメタ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
 
 input group "=== 監視する時間足 ==="
@@ -97,7 +97,7 @@ input bool InpEMAAlignShowZone  = true;  // 行表示にゾーンラベルを表
 input bool InpEMAAlignShowDivergence = true; // ダイバージェンス検出を表示 (v2.0)
 
 input group "=== 急変検知との連携 ==="
-input bool UseSpikeOverride  = true;  // 急変を検知したら圧縮表示を解除して「急変」として表示する
+input bool UseSpikeOverride  = true;  // 急変を検知したら圧縮表示を解除して「急変」として示する
 input int  SpikeHoldBars     = 3;     // 急変表示を保持する本数(その時間足の本数)
 input bool SpikeShowAlways   = false; // trueなら圧縮中でない行の急変も表示(falseは圧縮中の行のみ対象)
 input bool UseSpikeV2        = true;  // 精度改善版(V2)の急変判定を使う(falseなら従来のV1)
@@ -153,7 +153,7 @@ int             g_immScore[];
 bool            g_immAct[];
 bool            g_immUp[];
 
-// TDシーケンシャル、ウォルフ、一目、ハーモニック、出来高、TTM結果
+// TDシーケンシャル、ウォルフ、一目、ハーモニック、出来高、TTM結果、RSI、AI
 TDS_Result      g_td[];
 datetime        g_tdBar[];
 WLF_Result      g_wlf[];
@@ -164,8 +164,13 @@ HARM_Result     g_harm[];
 datetime        g_harmBar[];
 VOL_Result      g_vol[];
 TTM_Result      g_ttm[];                     // TTM Squeeze結果 (追加)
+RSI_Result      g_rsi[];                     // RSIダイバージェンス結果（追加）
 HARM_DRAW_MODE  g_harmDrawMode = HARM_DRAW_FULL; // ハーモニック 描画モード
-EMA_ALIGN_Result g_emaAlign[];                   // symbolごとのEMAアライメント結果
+EMA_ALIGN_Result g_emaAlign[];                   // symbolごのEMAアライメント結果
+
+// AI用グローバル変数は AI_Integration_Patch.mqh 側で宣言する
+// ここで宣言すると二重定義エラーになるので、ここでは宣言しない
+#include "MarketEngines/AI_Integration_Patch.mqh"
 
 //--- TRANSITION表示保持・事後計測用
 int             g_transitionHoldRemaining[];
@@ -183,7 +188,7 @@ struct CCOMP_VerificationEvent
    int      startScore;
    double   startATR;
    int      hitDir;      // 0=未到達, 1=上方到達済, -1=下方到達済
-   bool     reverted;    // 到達後に開始価格まで戻ったか
+   bool     reverted;    // 到達後に開始開始価格まで戻ったか
   };
 CCOMP_VerificationEvent g_verification[];
 string          g_lastOutcome[];
@@ -694,6 +699,9 @@ int OnInit()
    ArrayResize(g_harmBar, g_scanTotal);
    ArrayResize(g_vol,    g_scanTotal); // 出来高配列の初期化
    ArrayResize(g_ttm,    g_scanTotal); // TTM Squeeze配列の初期化 (追加)
+   ArrayResize(g_rsi,    g_scanTotal); // RSIダイバージェンス配列の初期化（追加）
+   ArrayResize(g_LastAIInputs, g_scanTotal);  // AI入力配列の初期化（追加）
+   ArrayResize(g_LastAIPreds,  g_scanTotal);  // AI予測配列の初期化（追加）
    ArrayResize(g_baseBar, g_scanTotal);
 
    ArrayResize(g_transitionHoldRemaining, g_scanTotal);
@@ -718,6 +726,9 @@ int OnInit()
       g_harmBar[tk]    = 0;
       g_harm[tk].ready = false;
       g_harm[tk].found = false;
+      g_rsi[tk].ready  = false;  // RSI初期化（追加）
+      g_rsi[tk].divDir = 0;
+      g_rsi[tk].rsiNow = 50.0;
       g_transitionHoldRemaining[tk] = 0;
       g_hasUpdatedSinceInit[tk]     = false;
       g_lastTransitionLogBar[tk]    = 0;
@@ -992,6 +1003,13 @@ void UpdateAndDraw()
       TTM_Compute(g_scan[i].symbol, g_scan[i].tf, g_ttm[i]);
      }
 
+   // RSIダイバージェンスエンジンの計算ループ（追加）
+   for(int i = 0; i < g_scanTotal; i++)
+     {
+      if(!g_scan[i].ready) continue;
+      RSI_Compute(g_scan[i].symbol, g_scan[i].tf, g_rsi[i]);
+     }
+
    if(WLF_Enable)
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -1020,6 +1038,8 @@ void UpdateAndDraw()
             feat += ";" + TDS_Feat(g_td[i]) + ";td_align=" + (tdAlign ? "1" : "0");
          if(ICH_Enable && g_ich[i].ready)
             feat += ";" + ICH_Feat(g_ich[i]);
+         if(RSI_Enable && g_rsi[i].ready)
+            feat += ";" + RSI_Feat(g_rsi[i]);
 
          if(SLG_IsOn())
            {
@@ -1075,16 +1095,13 @@ void UpdateAndDraw()
             feat += ";" + TDS_Feat(g_td[i]);
          if(ICH_Enable && g_ich[i].ready)
             feat += ";" + ICH_Feat(g_ich[i]);
-         
-         // SignalLogger の特徴量に追加
          if(StringLen(feat) > 0) feat += ";";
          feat += VOL_Feat(g_vol[i]);
-         
-         // TTM特徴量を追加 (追加)
          if(StringLen(feat) > 0) feat += ";";
          feat += TTM_Feat(g_ttm[i]);
-         
-         // 第1段階: EMAアライメント情報を追加（最新の計算結果が即座に反映される）
+         if(StringLen(feat) > 0) feat += ";";
+         feat += RSI_Feat(g_rsi[i]);
+
          if(InpEMAAlignEnable)
            {
             int siEMA = i / g_tfCount;
@@ -1191,15 +1208,14 @@ void UpdateAndDraw()
 
                double px = SymbolInfoDouble(g_scan[i].symbol, SYMBOL_BID);
                string featS = StringFormat("dir=%s;atr_ratio=%.2f;z_robust=%.2f", isUp ? "up" : "down", ratio, z);
-               
-               // 第1段階: EMAアライメント情報を追加（最新の計算結果が即座に反映される）
+
                if(InpEMAAlignEnable)
                  {
                   int siEMA = i / g_tfCount;
                   if(siEMA >= 0 && siEMA < g_symbolCount && g_emaAlign[siEMA].ready)
                      featS += ";" + EMA_AlignFeat(g_emaAlign[siEMA]);
                  }
-               
+
                if(SLG_IsOn())
                   SLG_LogEvent("SPIKE", g_scan[i].symbol, g_scan[i].tf, nowT, px, sp.atrAvg, featS);
               }
@@ -1472,6 +1488,10 @@ void UpdateAndDraw()
       if(TTM_ShowInList)
          line += TTM_Text(g_ttm[idx]);
 
+      // RSIダイバージェンス表示（追加）
+      if(RSI_ShowInList && g_rsi[idx].ready)
+         line += RSI_Text(g_rsi[idx]);
+
       // EMA v2.0: 圧縮・強圧・超圧・発射・急変の全行にEMAサインを付ける
       if(InpEMAAlignEnable && (candKind[r] == 0 || candKind[r] == 1))
         {
@@ -1483,19 +1503,16 @@ void UpdateAndDraw()
                emaMark = " ◎押し目";
             else
                emaMark = " ◎戻り";
-           
-            // ゾーンラベル追加 (v2.0)
+
             if(InpEMAAlignShowZone && StringLen(g_emaAlign[siEMA].zoneLabel) > 0)
                emaMark += "(" + g_emaAlign[siEMA].zoneLabel + ")";
-           
-            // EQSスコア追加 (v2.0)
+
             if(InpEMAAlignShowEQS && g_emaAlign[siEMA].eqs > 0)
                emaMark += StringFormat("[EQS%d]", g_emaAlign[siEMA].eqs);
-           
-            // ダイバージェンス追加 (v2.0)
+
             if(InpEMAAlignShowDivergence && g_emaAlign[siEMA].divergence != 0)
                emaMark += (g_emaAlign[siEMA].divergence > 0 ? "↗" : "↘");
-           
+
             if(candKind[r] == 1)
               {
                line += emaMark;
@@ -1839,7 +1856,7 @@ void DrawDetailPanel()
                                  tot, up, dn, fl, nm, nd, ud,
                                  (tot > 0.0 ? (up + dn) / tot * 100.0 : 0.0));
          clrs[L] = base; L++;
-         
+
          if(StringLen(g_lastOutcome[idx]) > 0)
            {
             lines[L] = "  [前回結果] " + g_lastOutcome[idx];
@@ -1883,6 +1900,18 @@ void DrawDetailPanel()
          clrs[L]  = base; L++;
         }
 
+      // RSIダイバージェンス（追加）
+      if(RSI_Enable && g_rsi[idx].ready)
+        {
+         string rsiDivText = "";
+         if(g_rsi[idx].divDir > 0)      rsiDivText = "買いダイバージェンス（RSI上昇 / 価格下落）";
+         else if(g_rsi[idx].divDir < 0) rsiDivText = "売りダイバージェンス（RSI下落 / 価格上昇）";
+         else                           rsiDivText = "ダイバージェンスなし";
+
+         lines[L] = StringFormat("  [RSI] %.1f %s", g_rsi[idx].rsiNow, rsiDivText);
+         clrs[L]  = (g_rsi[idx].divDir != 0) ? clrAqua : clrWhite; L++;
+        }
+
       REL_Result rrD;
       EVT_Info   evD;
       ComputeRowImminence(idx, rrD, evD);
@@ -1910,34 +1939,30 @@ void DrawDetailPanel()
          if(siD >= 0 && g_emaAlign[siD].ready)
            {
             EMA_ALIGN_Result ea = g_emaAlign[siD];
-            
-            // --- 基本情報ライン ---
+
             string h4Txt = !InpEMAAlignUseH4 ? "判定外" : (ea.slopeH4 > 0 ? "上向き" : (ea.slopeH4 < 0 ? "下向き" : "横ばい"));
             string h1Txt = (ea.slopeH1 > 0 ? "上向き" : (ea.slopeH1 < 0 ? "下向き" : "横ばい"));
-            string posTxt = (ea.pricePos > 0 ? "H1 EMAより上" : (ea.pricePos < 0 ? "H1 EMAより下" : "H1 EMA付近"));
+            string posTxt = (ea.pricePos > 0 ? "H1 EMAより上" : (ea.pricePos < 0 ? "H1 EMAり下" : "H1 EMA付近"));
             string alignTxt = (ea.dir > 0 ? " → 押し目条件成立" : (ea.dir < 0 ? " → 戻り条件成立" : " → 条件なし"));
             lines[L] = StringFormat("  [EMAアライメント v2.0] H4 %s / H1 %s / 価格は%s%s",
                                     h4Txt, h1Txt, posTxt, alignTxt);
             clrs[L] = (ea.dir != 0 ? CCOMP_StateColor(inst.state) : base); L++;
-            
-            // --- v2.0 スコア詳細 ---
+
             if(ea.dir != 0)
               {
                string divTxt = "";
                if(ea.divergence > 0) divTxt = " ダイバージェンス(買い)↗";
                else if(ea.divergence < 0) divTxt = " ダイバージェンス(売り)↘";
-               
+
                lines[L] = StringFormat("    トレンド強度:%d/100 | 深さスコア:%d/100 | アライメント:%d/100 | EQS:%d/100%s",
                                        ea.trendStrength, ea.depthScore, ea.alignmentScore, ea.eqs, divTxt);
                clrs[L] = (ea.eqs >= 70 ? clrAqua : (ea.eqs >= 40 ? clrYellow : base)); L++;
-               
-               // ゾーンラベルと動的ATR
+
                lines[L] = StringFormat("    ゾーン:%s | 動的ATR倍率:%.2f | H4 ATR:%.5f | 距離:%.5f",
                                        ea.zoneLabel, ea.dynamicATRMult, ea.atrH4, ea.distH4);
                clrs[L] = base; L++;
               }
-            
-            // --- 日足フィルター ---
+
             if(InpEMAAlignUseD1)
               {
                string d1Txt = (ea.slopeD1 > 0 ? "上向き" : (ea.slopeD1 < 0 ? "下向き" : "横ばい"));
@@ -1946,17 +1971,15 @@ void DrawDetailPanel()
                                        d1Filter ? " → トレンド方向不一致でフィルタ適用中" : "");
                clrs[L] = d1Filter ? clrGray : base; L++;
               }
-            
-            // --- M15アライメント（UseM15時） ---
+
             if(InpEMAAlignUseM15)
               {
                string m15Txt = (ea.slopeM15 > 0 ? "上向き" : (ea.slopeM15 < 0 ? "下向き" : "横ばい"));
-               string m15Pos = (ea.pricePosM15 > 0 ? "M15 EMAより上" : (ea.pricePosM15 < 0 ? "M15 EMAより下" : "M15 EMA付近"));
+               string m15Pos = (ea.pricePosM15 > 0 ? "M15 EMAより上" : (ea.pricePosM15 < 0 ? "M15 EMAより下" : "M15 EMA近"));
                lines[L] = StringFormat("    [EMA200 M15] %s / 価格は%s", m15Txt, m15Pos);
                clrs[L] = base; L++;
               }
-            
-            // --- 長期トレンド確認 ---
+
             if(InpEMAAlignUseH4)
               {
                string h4MedTxt = (ea.slopeH4Med > 0 ? "上向き" : (ea.slopeH4Med < 0 ? "下向き" : "横ばい"));
@@ -2020,7 +2043,7 @@ void DrawDetailPanel()
            }
          else
            {
-            lines[L] = "  判定：トレンドの疲弊を示唆。押し目買い/戻り売りのタイミングを窺っています。";
+            lines[L] = "  判定：トレンドの疲弊を示唆。押し目し目買い/戻り売りのタイミングを窺っています。";
             clrs[L]  = clrWhite; L++;
            }
         }
