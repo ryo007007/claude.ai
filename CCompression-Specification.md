@@ -211,9 +211,9 @@ GMDの37章 Energy の思想（%と呼ばない、材料不足は0を返さな�
 | TTM Squeeze Engine | [DONE] |
 | RSI Divergence Engine | [DONE] |
 | Supertrend Engine | [DONE] |
-| Donchian Engine | [DONE?] 表示確認待ち |
-| Exit Zone Engine v3（スプレッド対応） | [DONE?] 表示確認待ち |
-| Reverse-target フィルタ（常時ON） | [DONE?] リスト減少の確認待ち |
+| Donchian Engine | [DONE] 表示確認済み（2026-11-19：詳細に Upper/Lower、リストに [DON]、AI根拠に DON_LOWER、Exit Zone TP2に Donchian） |
+| Exit Zone Engine v3（スプレッド対応） | [DONE] 表示確認済み（2026-11-19：売り=Bid入値、Ask/Bid併記、TP2 (2R/Donchian)、ゾーン・ドラッグ線表示） |
+| Reverse-target フィルタ（常時ON） | [DONE] 表示確認済み（2026-11-19：表示件数が少なくなったことをユーザー確認） |
 | Anomaly 注意書き | [NOTE] コードなし |
 | AI 要約（詳細パネル 1〜2行） | [NEXT] |
 | デザイン（ヒートマップ / EQSバー / 2ウィンドウ） | [LATER] |
@@ -674,8 +674,7 @@ class CDonchianEngine : public IEngine
 
 ### 11.7 Implementation Notes
 
-- 実装済みだが、表示確認待ち（[DONE?]）。コンパイル結果と表示確認をユーザーに確認すること
-- Donchian だけで発射を決めない。CCompression の発射と合わせて見る
+- 表示確認済み（2026-11-19：詳細に Upper 1.22502 / Lower 1.21307、リストに [DON]、AI根拠に DON_LOWER）。Donchian だけで発射を決めない。CCompression の発射と合わせて見る
 
 ### 11.8 Future Expansion
 
@@ -752,8 +751,8 @@ class CExitZoneEngine
 ### 12.7 Implementation Notes
 
 - **自動注文はしない。** OrderSend / OrderClose をこのエンジンに書かない。書いたら仕様違反である
-- スプレッド v3 対応済みだが、表示確認待ち（[DONE?]）。詳細パネルの SP値と、リストの行数減少を確認すること
-- Reverse-target フィルタ適用後、リストの行数が減っているはずである。減っていない場合は、フィルタが効いていない
+- スプレッド v3 表示確認済み（2026-11-19：売り=Bid入値 1.21553、Ask 1.21598 / Bid 1.21553 併記、TP2 1.21352 (2R/Donchian)）
+- Reverse-target フィルタ表示確認済み（2026-11-19：表示件数が少なくなったことをユーザー確認）
 - TP/SL は「目安」である。「ここで必ず利確・損切り」という断定ではない。UserManual に一文を必ず書く
 - ゾーンは市場とともに更新する。固定のまま放置しない
 
@@ -1038,7 +1037,7 @@ src/
 |---|---|
 | Phase 1 [DONE] | CCompression 本体 + リスト + 詳細パネル + EMAAlignment |
 | Phase 2 [DONE] | Volume + TTM + RSI Divergence + Supertrend |
-| Phase 3 [DONE?] | Donchian + Exit Zone v3 + Reverse-target フィルタ（表示確認待ち） |
+| Phase 3 [DONE] | Donchian [DONE] + Exit Zone v3 [DONE] + Reverse-target フィルタ [DONE]（表示件数減少を確認） |
 | Phase 4 [NEXT] | AI要約（詳細パネル 1〜2行） |
 | Phase 5 [LATER] | デザイン（ヒートマップ / EQSバー / 2ウィンドウ） |
 | Phase 6 [LATER] | Anomaly 注意書きの表示確認（コードなし） |
@@ -1049,9 +1048,9 @@ src/
 
 | # | 課題 | 状態 |
 |---|---|---|
-| 1 | Donchian の表示確認 | [DONE?] コンパイル結果と表示を確認すること |
-| 2 | Exit Zone スプレッド v3 の表示確認 | [DONE?] 詳細パネルの SP値と、リストの行数減少を確認すること |
-| 3 | Reverse-target フィルタの表示確認 | [DONE?] リストの行数が減っているか確認すること |
+| 1 | Donchian の表示確認 | [DONE] 2026-11-19 スクショで確認済み |
+| 2 | Exit Zone スプレッド v3 の表示確認 | [DONE] 2026-11-19 スクショで確認済み |
+| 3 | Reverse-target フィルタの表示確認 | [DONE] 2026-11-19 表示件数減少をユーザー確認済み |
 | 4 | EMA v1.53 を採用するか | 提案済み。利用者の合図待ち |
 | 5 | AI要約の詳細設計 | Option 2 で確定済み。実装は NEXT |
 | 6 | デザインの順序 | 内容固定後に決める |
@@ -1128,6 +1127,7 @@ src/
 ---
 
 *— End of CCompression Specification v1.0 —*
+
 
 
 大事なとこだけ抜き出すと：
