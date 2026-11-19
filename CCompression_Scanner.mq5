@@ -174,7 +174,10 @@ EMA_ALIGN_Result g_emaAlign[];                   // symbolごのEMAアライメ�
 
 // AI用グローバル変数は AI_Integration_Patch.mqh 側で宣言する
 // ここで宣言すると二重定義エラーになるので、ここでは宣言しない
+#include "MarketEngines/ExitZoneEngine.mqh"
 #include "MarketEngines/AI_Integration_Patch.mqh"
+
+EXIT_Result g_exit;   // 損切り・利確ゾーン結果
 
 //--- TRANSITION表示保持・事後計測用
 int             g_transitionHoldRemaining[];
@@ -874,6 +877,7 @@ void OnDeinit(const int reason)
    WLF_ClearDrawing();
    HARM_ClearDrawing();
    AI_Deinit();
+   EXIT_Clear();
    ChartRedraw(0);
   }
 
@@ -1356,6 +1360,66 @@ void UpdateAndDraw()
 
       if(!PassFilter(0, dispState)) continue;
 
+      // 逆向きフィルター (常にON)
+      // 方向が決まらない行は、そのまま出す
+      // 逆向きが確定した行だけ、出さない
+      {
+       // 方向を決める：その行の Supertrend → AI → EMA の順
+       int dirRow = 0;
+       if(g_st[i].ready && g_st[i].dir != 0)
+          dirRow = g_st[i].dir;
+
+       // AI：その行の予測があれば使う (g_LastAIPreds があれば)
+       if(dirRow == 0 && AI_Enable)
+         {
+          // AI_Integration_Patch の配列名に合わせてください
+          // g_LastAIPreds[i].direction が無い場合は、このブロックを飛ばす
+          // ここでは ST / EMA だけでも動くように、コンパイルエラーになる場合は削除してください
+          #ifdef AI_HAS_ROW_PRED
+          if(g_LastAIPreds[i].direction != 0)
+             dirRow = g_LastAIPreds[i].direction;
+          #endif
+         }
+
+       if(dirRow == 0)
+         {
+          int siRow = i / g_tfCount;
+          if(siRow >= 0 && siRow < g_symbolCount && g_emaAlign[siRow].ready && g_emaAlign[siRow].dir != 0)
+             dirRow = g_emaAlign[siRow].dir;
+         }
+
+       if(dirRow != 0)
+         {
+          double atrRow = 0.0;
+          double atrBufRow[1];
+          if(CopyBuffer(g_scan[i].atrHandle, 0, 1, 1, atrBufRow) == 1)
+             atrRow = atrBufRow[0];
+          if(atrRow <= 0.0 && g_scan[i].atrPct > 0.0)
+            {
+             double pxRow = iClose(g_scan[i].symbol, g_scan[i].tf, 1);
+             if(pxRow > 0.0) atrRow = pxRow * g_scan[i].atrPct / 100.0;
+            }
+
+          double stLineRow = (g_st[i].ready) ? g_st[i].line : 0.0;
+          double donUpRow = (g_don[i].ready) ? g_don[i].upper : 0.0;
+          double donDnRow = (g_don[i].ready) ? g_don[i].lower : 0.0;
+
+          EXIT_Result rRow;
+          if(EXIT_Compute(g_scan[i].symbol, g_scan[i].tf, dirRow,
+                          atrRow, stLineRow, donUpRow, donDnRow, rRow))
+            {
+             if(!EXIT_IsValid(rRow))
+               {
+                // 逆向き確定 → 一覧に出さない
+                // 急変で抑止されてる行と同じ扱いにする
+                continue;
+               }
+            }
+          // EXIT_Compute が false (ATRが取れない等) → 方向が決まらないのと同じ扱いで、そのまま出す
+         }
+       // dirRow == 0 → 方向が決まらない → そのまま出す
+      }
+
       candIdx[n]  = i;
       candKind[n] = 0;
       double baseKey = (double)g_scan[i].score;
@@ -1592,6 +1656,68 @@ void UpdateAndDraw()
      }
    else
       ObjectDelete(0, "CCOMP_Scan_More");
+
+   // 損切り・利確ゾーンの計算と描画 (現在のチャートの通貨・時間足)
+   if(EXIT_Enable)
+     {
+      int idxExit = -1;
+      for(int i = 0; i < g_scanTotal; i++)
+         if(g_scan[i].symbol == _Symbol && g_scan[i].tf == (ENUM_TIMEFRAMES)_Period) { idxExit = i; break; }
+
+      // 方向を決める：Supertrend → AI → EMA の順
+      // EMAは押し目条件が無いと0になるので、最後にする
+      int exitDir = 0;
+      if(idxExit >= 0 && g_st[idxExit].ready && g_st[idxExit].dir != 0)
+         exitDir = g_st[idxExit].dir;
+
+      if(exitDir == 0)
+        {
+         AI_Prediction tmpPred;
+         if(AI_GetCurrentPrediction(tmpPred) && tmpPred.direction != 0)
+            exitDir = tmpPred.direction;
+        }
+
+      if(exitDir == 0)
+        {
+         int siExit = -1;
+         for(int s = 0; s < g_symbolCount; s++)
+            if(g_symbols[s] == _Symbol) { siExit = s; break; }
+         if(siExit >= 0 && g_emaAlign[siExit].ready && g_emaAlign[siExit].dir != 0)
+            exitDir = g_emaAlign[siExit].dir;
+        }
+
+      if(EXIT_Debug)
+         PrintFormat("[EXIT] symbol=%s tf=%s idx=%d stReady=%d stDir=%d exitDir=%d",
+                     _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period), idxExit,
+                     (idxExit >= 0 ? (g_st[idxExit].ready ? 1 : 0) : -1),
+                     (idxExit >= 0 ? g_st[idxExit].dir : 0), exitDir);
+
+      if(exitDir != 0 && idxExit >= 0)
+        {
+         double atrExit = 0.0;
+         double atrBufExit[1];
+         if(CopyBuffer(g_scan[idxExit].atrHandle, 0, 1, 1, atrBufExit) == 1)
+            atrExit = atrBufExit[0];
+         // atrHandleが0なら、g_scanのatrPctから作る
+         if(atrExit <= 0.0 && g_scan[idxExit].atrPct > 0.0)
+           {
+            double pxExit = iClose(_Symbol, (ENUM_TIMEFRAMES)_Period, 1);
+            if(pxExit > 0.0) atrExit = pxExit * g_scan[idxExit].atrPct / 100.0;
+           }
+
+         double stLineExit = (g_st[idxExit].ready) ? g_st[idxExit].line : 0.0;
+         double donUpExit = (g_don[idxExit].ready) ? g_don[idxExit].upper : 0.0;
+         double donDnExit = (g_don[idxExit].ready) ? g_don[idxExit].lower : 0.0;
+
+         if(EXIT_Compute(_Symbol, (ENUM_TIMEFRAMES)_Period, exitDir,
+                         atrExit, stLineExit, donUpExit, donDnExit, g_exit))
+            EXIT_Draw(g_exit);
+         else
+            EXIT_Clear();
+        }
+      else
+         EXIT_Clear();
+     }
 
    DrawDetailPanel();
    DrawWolfeChart();
@@ -2249,6 +2375,15 @@ void DrawDetailPanel()
          clrs[L]  = clrWhite;
          L++;
         }
+     }
+
+   // 損切り・利確ゾーン (詳細パネル)
+   if(g_exit.ready)
+     {
+      lines[L] = StringFormat("  %s", EXIT_Text(g_exit));
+      clrs[L] = clrWhite; L++;
+      lines[L] = "  使い方: ポジションの損切り線を赤帯まで、利確線を緑/青帯までドラッグ";
+      clrs[L] = clrGray; L++;
      }
 
    for(int j = 0; j < L; j++)

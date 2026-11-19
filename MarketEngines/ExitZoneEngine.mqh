@@ -1,148 +1,190 @@
-// ExitZoneEngine.mqh
-// 損切り・利確ゾーン表示エンジン
-// 表示だけ。注文は出さない。手動でドラッグして使う。
-// 圧縮エンジン本体は触らない。別エンジン。
+// ExitZoneEngine.mqh v3
+// スプレッド対応版
+// 買い：entry=Ask / 損切り・利確線=Bid (発動はBid)
+// 売り：entry=Bid / 損切り・利確線=Ask (発動はAsk)
+// 表示だけ。注文は出さない。
 #property strict
 
 input group "=== 損切り・利確ゾーン ==="
-input bool   EXIT_Enable      = true;   // ゾーン表示をする
-input double EXIT_SL_ATR_Mult = 1.5;    // 損切り = ATR x 何倍
-input double EXIT_TP1_R       = 1.0;    // TP1 = 何R
-input double EXIT_TP2_R       = 2.0;    // TP2 = 何R
-input bool   EXIT_UseST_Trail = true;   // 入った後、Supertrendで損切りをトレーリングする
-input bool   EXIT_ShowZones    = true;   // ゾーン (帯) で表示する (falseなら線だけ)
-input color  EXIT_SL_Color     = clrRed;       // 損切りゾーンの色
-input color  EXIT_TP1_Color    = clrLime;      // TP1ゾーンの色
-input color  EXIT_TP2_Color    = clrDodgerBlue; // TP2ゾーンの色
+input bool   EXIT_Enable       = true;
+input double EXIT_SL_ATR_Mult  = 1.5;
+input double EXIT_TP1_R        = 1.0;
+input double EXIT_TP2_R        = 2.0;
+input bool   EXIT_UseST_Trail  = true;
+input bool   EXIT_ShowZones    = true;
+input bool   EXIT_Debug        = false; // 確認が終わったら false にしてください
+input color  EXIT_SL_Color     = clrRed;
+input color  EXIT_TP1_Color    = clrLime;
+input color  EXIT_TP2_Color    = clrDodgerBlue;
 
 struct EXIT_Result
   {
    bool   ready;
-   int    dir;         // +1=買い -1=売り 0=方向なし
-   double entry;       // 基準価格 (今の終値 or ポジションの建値)
-   double sl;          // 損切り価格
-   double slTop;       // 損切りゾーンの上
-   double slBot;       // 損切りゾーンの下
-   double tp1;         // TP1価格
+   int    dir;
+   double entry;       // 実際に約定する価格 (買い=Ask / 売り=Bid)
+   double entryAsk;    // Ask
+   double entryBid;    // Bid
+   double spread;      // Ask - Bid (価格差)
+   double sl;          // 損切り線 = 発動する価格 (買い=Bid / 売り=Ask)
+   double slTop;
+   double slBot;
+   double tp1;         // TP1線 = 発動する価格
    double tp1Top;
    double tp1Bot;
-   double tp2;         // TP2価格
+   double tp2;         // TP2線 = 発動する価格
    double tp2Top;
    double tp2Bot;
-   double oneR;        // 1Rの値幅
-   bool   hasPos;      // ポジションを持ってるか
-   double posPrice;    // ポジションの建値
+   double oneR;
+   bool   hasPos;
+   double posPrice;
   };
 
-// 計算 (現在のチャートの通貨・時間足で計算する)
 bool EXIT_Compute(const string symbol, const ENUM_TIMEFRAMES tf, const int dir,
-                  const double atr, const double stLine, const double donUpper, const double donLower,
+                  const double atrIn, const double stLine, const double donUpper, const double donLower,
                   EXIT_Result &r)
   {
    r.ready = false;
    r.dir = dir;
-   r.entry = 0.0;
+   r.entry = 0.0; r.entryAsk = 0.0; r.entryBid = 0.0; r.spread = 0.0;
    r.sl = 0.0; r.slTop = 0.0; r.slBot = 0.0;
    r.tp1 = 0.0; r.tp1Top = 0.0; r.tp1Bot = 0.0;
    r.tp2 = 0.0; r.tp2Top = 0.0; r.tp2Bot = 0.0;
-   r.oneR = 0.0;
-   r.hasPos = false;
-   r.posPrice = 0.0;
+   r.oneR = 0.0; r.hasPos = false; r.posPrice = 0.0;
 
-   if(!EXIT_Enable) return false;
-   if(dir == 0) return false;
-   if(atr <= 0.0) return false;
+   if(!EXIT_Enable) { if(EXIT_Debug) Print("[EXIT] Enable=false"); return false; }
+   if(dir == 0)     { if(EXIT_Debug) Print("[EXIT] dir=0"); return false; }
 
-   double close = iClose(symbol, tf, 1);
-   if(close <= 0.0) return false;
+   double atr = atrIn;
+   if(atr <= 0.0)
+     {
+      int h = iATR(symbol, tf, 14);
+      if(h != INVALID_HANDLE)
+        {
+         double b[1];
+         if(CopyBuffer(h, 0, 1, 1, b) == 1) atr = b[0];
+         IndicatorRelease(h);
+        }
+     }
+   if(atr <= 0.0) { if(EXIT_Debug) Print("[EXIT] ATR=0"); return false; }
 
-   // ポジションを持ってるか確認
+   // 今の Bid / Ask を取る
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   if(bid <= 0.0 || ask <= 0.0)
+     {
+      // 取れなければ、終値(Bid)で代用
+      double c = iClose(symbol, tf, 1);
+      if(c <= 0.0) { if(EXIT_Debug) Print("[EXIT] close=0"); return false; }
+      bid = c;
+      ask = c;
+     }
+   double spread = MathMax(0.0, ask - bid);
+   r.spread = spread;
+
+   // ポジションを持ってるか
    bool hasPos = false;
    double posPrice = 0.0;
    if(PositionSelect(symbol))
      {
-      // 同じ通貨のポジションがある
       hasPos = true;
       posPrice = PositionGetDouble(POSITION_PRICE_OPEN);
      }
-
-   // 基準価格：ポジションがあれば建値、なければ今の終値
-   double entry = hasPos ? posPrice : close;
-   r.entry = entry;
    r.hasPos = hasPos;
    r.posPrice = posPrice;
 
-   // 1R = ATR x 倍率
+   double entryAsk = 0.0;
+   double entryBid = 0.0;
+   double entry = 0.0;
+
+   if(dir > 0)
+     {
+      // 買い：入るのは Ask
+      entryAsk = hasPos ? posPrice : ask;
+      entryBid = entryAsk - spread;
+      entry = entryAsk;
+     }
+   else
+     {
+      // 売り：入るのは Bid
+      entryBid = hasPos ? posPrice : bid;
+      entryAsk = entryBid + spread;
+      entry = entryBid;
+     }
+
+   r.entry = entry;
+   r.entryAsk = entryAsk;
+   r.entryBid = entryBid;
+
    double oneR = atr * EXIT_SL_ATR_Mult;
    r.oneR = oneR;
-
-   // ゾーンの半分の幅 = ATRの0.25倍 (帯の厚み)
    double half = atr * 0.25;
 
-   // 損切り：ATRベース
-   double slATR = entry - dir * oneR;
-
-   // 入った後で、Supertrendを使う場合
-   // 買い：損切りは Supertrendラインの少し下。ただし、建値より下にはしない (建値割れは防ぐ)
-   // 売り：損切りは Supertrendラインの少し上。ただし、建値より上にはしない
-   double sl = slATR;
-   if(hasPos && EXIT_UseST_Trail && stLine > 0.0)
+   // 損切り・利確は「発動する側」の価格で計算する
+   // 買い：発動は Bid。売り：発動は Ask。
+   // Supertrend / Donchian は Bidベースなので、売りの時は spread を足して Ask に直す
+   if(dir > 0)
      {
-      if(dir > 0)
+      // 買い：基準は Bid
+      double base = entryBid;
+
+      double sl = base - oneR;
+      if(hasPos && EXIT_UseST_Trail && stLine > 0.0)
         {
-         // 買い：Supertrendラインの少し下が損切り
-         // ただし、ATR損切りより上にしか動かさない (いい方向にだけ動く)
+         // STラインは Bidベースなので、そのまま使える
          double slST = stLine - atr * 0.2;
          if(slST > sl) sl = slST;
-         // 建値より上に損切りを持っていかない (建値移動は手動でやる)
-         if(sl > entry) sl = entry;
+         if(sl > base) sl = base;
         }
-      else
+      r.sl = sl; r.slTop = sl + half; r.slBot = sl - half;
+
+      double tp1 = base + oneR * EXIT_TP1_R;
+      r.tp1 = tp1; r.tp1Top = tp1 + half; r.tp1Bot = tp1 - half;
+
+      double tp2ATR = base + oneR * EXIT_TP2_R;
+      double tp2 = tp2ATR;
+      // Donchian上バンドは Bidベースなので、そのまま比べられる
+      if(donUpper > 0.0 && donUpper > base && donUpper < tp2ATR) tp2 = donUpper;
+      r.tp2 = tp2; r.tp2Top = tp2 + half; r.tp2Bot = tp2 - half;
+     }
+   else
+     {
+      // 売り：基準は Ask
+      double base = entryAsk;
+
+      double sl = base + oneR;
+      if(hasPos && EXIT_UseST_Trail && stLine > 0.0)
         {
-         double slST = stLine + atr * 0.2;
+         // STラインは Bidベース → Ask に直す
+         double stAsk = stLine + spread;
+         double slST = stAsk + atr * 0.2;
          if(slST < sl) sl = slST;
-         if(sl < entry) sl = entry;
+         if(sl < base) sl = base;
         }
-     }
+      r.sl = sl; r.slTop = sl + half; r.slBot = sl - half;
 
-   r.sl = sl;
-   r.slTop = sl + half;
-   r.slBot = sl - half;
+      double tp1 = base - oneR * EXIT_TP1_R;
+      r.tp1 = tp1; r.tp1Top = tp1 + half; r.tp1Bot = tp1 - half;
 
-   // TP1 = 1R
-   double tp1 = entry + dir * oneR * EXIT_TP1_R;
-   r.tp1 = tp1;
-   r.tp1Top = tp1 + half;
-   r.tp1Bot = tp1 - half;
-
-   // TP2 = 2R または Donchianバンド (どっちか近い方)
-   double tp2ATR = entry + dir * oneR * EXIT_TP2_R;
-   double tp2 = tp2ATR;
-   if(dir > 0 && donUpper > 0.0)
-     {
-      // 買い：Donchian上バンドが TP2より手前にあれば、そっちを使う
-      if(donUpper > entry && donUpper < tp2ATR) tp2 = donUpper;
+      double tp2ATR = base - oneR * EXIT_TP2_R;
+      double tp2 = tp2ATR;
+      // Donchian下バンドは Bidベース → Ask に直して比べる
+      if(donLower > 0.0)
+        {
+         double donLowerAsk = donLower + spread;
+         if(donLowerAsk < base && donLowerAsk > tp2ATR) tp2 = donLowerAsk;
+        }
+      r.tp2 = tp2; r.tp2Top = tp2 + half; r.tp2Bot = tp2 - half;
      }
-   else if(dir < 0 && donLower > 0.0)
-     {
-      if(donLower < entry && donLower > tp2ATR) tp2 = donLower;
-     }
-   r.tp2 = tp2;
-   r.tp2Top = tp2 + half;
-   r.tp2Bot = tp2 - half;
 
    r.ready = true;
    return true;
   }
 
-// チャートにゾーンを描く
 void EXIT_Draw(const EXIT_Result &r)
   {
-   // 古いゾーンを消す
    ObjectsDeleteAll(0, "EXIT_Zone_");
    ObjectsDeleteAll(0, "EXIT_Label_");
    if(!r.ready) return;
-   if(!EXIT_ShowZones && !EXIT_Enable) return;
 
    datetime t1 = iTime(_Symbol, _Period, 30);
    datetime t2 = iTime(_Symbol, _Period, 0) + (datetime)(PeriodSeconds(_Period) * 10);
@@ -152,34 +194,30 @@ void EXIT_Draw(const EXIT_Result &r)
       t2 = TimeCurrent() + (datetime)(PeriodSeconds(_Period) * 10);
      }
 
-   // 損切りゾーン
    string slName = "EXIT_Zone_SL";
    ObjectCreate(0, slName, OBJ_RECTANGLE, 0, t1, r.slTop, t2, r.slBot);
    ObjectSetInteger(0, slName, OBJPROP_COLOR, EXIT_SL_Color);
    ObjectSetInteger(0, slName, OBJPROP_FILL, true);
-   ObjectSetInteger(0, slName, OBJPROP_BACK, true);
+   ObjectSetInteger(0, slName, OBJPROP_BACK, false);
    ObjectSetInteger(0, slName, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, slName, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, slName, OBJPROP_HIDDEN, false);
 
-   // TP1ゾーン
    string tp1Name = "EXIT_Zone_TP1";
    ObjectCreate(0, tp1Name, OBJ_RECTANGLE, 0, t1, r.tp1Top, t2, r.tp1Bot);
    ObjectSetInteger(0, tp1Name, OBJPROP_COLOR, EXIT_TP1_Color);
    ObjectSetInteger(0, tp1Name, OBJPROP_FILL, true);
-   ObjectSetInteger(0, tp1Name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, tp1Name, OBJPROP_BACK, false);
    ObjectSetInteger(0, tp1Name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, tp1Name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, tp1Name, OBJPROP_HIDDEN, false);
 
-   // TP2ゾーン
    string tp2Name = "EXIT_Zone_TP2";
    ObjectCreate(0, tp2Name, OBJ_RECTANGLE, 0, t1, r.tp2Top, t2, r.tp2Bot);
    ObjectSetInteger(0, tp2Name, OBJPROP_COLOR, EXIT_TP2_Color);
    ObjectSetInteger(0, tp2Name, OBJPROP_FILL, true);
-   ObjectSetInteger(0, tp2Name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, tp2Name, OBJPROP_BACK, false);
    ObjectSetInteger(0, tp2Name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, tp2Name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, tp2Name, OBJPROP_HIDDEN, false);
 
-   // ラベル
    string dirTxt = (r.dir > 0 ? "買い" : "売り");
    string slLabel = "EXIT_Label_SL";
    ObjectCreate(0, slLabel, OBJ_TEXT, 0, t2, r.sl);
@@ -203,19 +241,48 @@ void EXIT_Draw(const EXIT_Result &r)
    ObjectSetInteger(0, tp2Label, OBJPROP_SELECTABLE, false);
   }
 
-// 描画を消す
 void EXIT_Clear()
   {
    ObjectsDeleteAll(0, "EXIT_Zone_");
    ObjectsDeleteAll(0, "EXIT_Label_");
   }
 
-// 詳細パネル用のテキスト
 string EXIT_Text(const EXIT_Result &r)
   {
    if(!r.ready) return "";
    string dirTxt = (r.dir > 0 ? "買い" : "売り");
    string posTxt = r.hasPos ? " (ポジションあり)" : " (入る前)";
-   return StringFormat("[損切り・利確 %s%s] 基準%.5f 損切り%.5f TP1 %.5f TP2 %.5f 1R=%.5f",
-                       dirTxt, posTxt, r.entry, r.sl, r.tp1, r.tp2, r.oneR);
+   string trigTxt = (r.dir > 0 ? "発動=Bid" : "発動=Ask");
+   return StringFormat("[損切り・利確 %s%s %s] 入値%.5f(Ask%.5f/Bid%.5f SP%.5f) 損切り%.5f TP1 %.5f TP2 %.5f 1R=%.5f",
+                       dirTxt, posTxt, trigTxt, r.entry, r.entryAsk, r.entryBid, r.spread, r.sl, r.tp1, r.tp2, r.oneR);
+  }
+// 損切り・利確の並びが正しいかチェック
+// 買い：損切り(Bid) < 入値(Bid) < TP1 < TP2 なら正しい
+// 売り：TP2 < TP1 < 入値(Ask) < 損切り(Ask) なら正しい
+// 方向が0、計算できてない場合は true を返す (そのまま出す)
+bool EXIT_IsValid(const EXIT_Result &r)
+  {
+   if(!r.ready) return true; // 計算できてない = 方向が決まってない → 出す
+   if(r.dir == 0) return true;
+
+   if(r.dir > 0)
+     {
+      // 買い：全部 Bid換算で比べる
+      // r.sl / r.tp1 / r.tp2 は Bid。r.entryBid も Bid。
+      if(!(r.sl < r.entryBid)) return false;
+      if(!(r.entryBid < r.tp1)) return false;
+      if(!(r.tp1 < r.tp2)) return false;
+      if(!(r.sl < r.tp1)) return false;
+      return true;
+     }
+   else
+     {
+      // 売り：全部 Ask換算で比べる
+      // r.sl / r.tp1 / r.tp2 は Ask。r.entryAsk も Ask。
+      if(!(r.tp2 < r.tp1)) return false;
+      if(!(r.tp1 < r.entryAsk)) return false;
+      if(!(r.entryAsk < r.sl)) return false;
+      if(!(r.tp1 < r.sl)) return false;
+      return true;
+     }
   }
