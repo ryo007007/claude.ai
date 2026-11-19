@@ -5,6 +5,7 @@
 //|  【設計】                                                          |
 //|  ・エンジンを再計算しない。スキャナーが計算済みの結果を使い回す    |
 //|    g_scan / g_td / g_ich / g_wlf / g_harm / g_emaAlign / g_spike |
+//|    / g_don                                                         |
 //|  ・詳細パネルは「今のチャート」の idx を使う                      |
 //|  ・存在しない AI_DetailPanelMulti_* は呼ばない                    |
 //|  ・results.csv の学習はしない (SignalLogger と未接続のため)       |
@@ -175,7 +176,7 @@ bool AI_BuildInput(const int idx, AI_Input &out)
       out.wlfDir = 0; out.wlfRR = 0;
       out.wlfPinBar = false; out.wlfEngulf = false;
      }
-     
+
    //--- Volume (計算済み g_vol)
    if(g_vol[idx].ready)
      {
@@ -202,7 +203,7 @@ bool AI_BuildInput(const int idx, AI_Input &out)
       out.ttmMomDir = 0; out.ttmMomentum = 0.0;
      }
 
-   //--- RSI Divergence (計算済み g_rsi)[cite: 12]
+   //--- RSI Divergence (計算済み g_rsi)
    if(g_rsi[idx].ready)
      {
       out.rsiNow      = g_rsi[idx].rsiNow;
@@ -214,6 +215,30 @@ bool AI_BuildInput(const int idx, AI_Input &out)
      {
       out.rsiNow = 50.0; out.rsiDivDir = 0;
       out.rsiRecent = false; out.rsiStrength = 0;
+     }
+
+   //--- Supertrend (計算済み g_st)
+   if(g_st[idx].ready)
+     {
+      out.stDir     = g_st[idx].dir;
+      out.stFlipped = g_st[idx].flipped;
+      out.stBars    = g_st[idx].trendBars;
+     }
+   else
+     {
+      out.stDir = 0; out.stFlipped = false; out.stBars = 0;
+     }
+
+   //--- Donchian (計算済み g_don)
+   if(g_don[idx].ready)
+     {
+      out.donDir   = g_don[idx].dir;
+      out.donPos   = g_don[idx].pos;
+      out.donBreak = (g_don[idx].brokeUp || g_don[idx].brokeDown);
+     }
+   else
+     {
+      out.donDir = 0; out.donPos = 0; out.donBreak = false;
      }
 
    //--- Harmonic (計算済み g_harm)

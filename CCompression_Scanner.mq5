@@ -13,7 +13,7 @@
 #property indicator_chart_window
 #property indicator_plots 0
 
-//---------------- ① 首先：#include をすべて上に集約 ----------------
+//---------------- ① まず：#include をすべて上に集約 ----------------
 #include "MarketEngines/CCompression.mqh"        // 圧縮検出エンジン
 #include "MarketEngines/SuddenMoveDetector.mqh"  // 急変検知エンジン
 #include "MarketEngines/SignalAlert.mqh"         // アラートエンジン
@@ -29,6 +29,8 @@
 #include "MarketEngines/VolumeEngine.mqh"          // 出来高エンジン
 #include "MarketEngines/TTMSqueezeEngine.mqh"      // TTM Squeezeエンジン（追加）
 #include "MarketEngines/RSIDivergenceEngine.mqh"     // RSIダイバージェンスエンジン（追加）
+#include "MarketEngines/SupertrendEngine.mqh"    // Supertrendエンジン（追加）
+#include "MarketEngines/DonchianEngine.mqh"      // Donchianエンジン（追加）
 #include "MarketEngines/AIPredictorEngine.mqh"
 #include "MarketEngines/AIPredictorTrainer.mqh"
 
@@ -153,7 +155,7 @@ int             g_immScore[];
 bool            g_immAct[];
 bool            g_immUp[];
 
-// TDシーケンシャル、ウォルフ、一目、ハーモニック、出来高、TTM結果、RSI、AI
+// TDシーケンシャル、ウォルフ、一目、ハーモニック、出来高、TTM結果、RSI、Supertrend、Donchian、AI
 TDS_Result      g_td[];
 datetime        g_tdBar[];
 WLF_Result      g_wlf[];
@@ -165,6 +167,8 @@ datetime        g_harmBar[];
 VOL_Result      g_vol[];
 TTM_Result      g_ttm[];                     // TTM Squeeze結果 (追加)
 RSI_Result      g_rsi[];                     // RSIダイバージェンス結果（追加）
+ST_Result       g_st[];                      // Supertrend結果（追加）
+DON_Result      g_don[];                     // Donchian結果（追加）
 HARM_DRAW_MODE  g_harmDrawMode = HARM_DRAW_FULL; // ハーモニック 描画モード
 EMA_ALIGN_Result g_emaAlign[];                   // symbolごのEMAアライメント結果
 
@@ -700,6 +704,8 @@ int OnInit()
    ArrayResize(g_vol,    g_scanTotal); // 出来高配列の初期化
    ArrayResize(g_ttm,    g_scanTotal); // TTM Squeeze配列の初期化 (追加)
    ArrayResize(g_rsi,    g_scanTotal); // RSIダイバージェンス配列の初期化（追加）
+   ArrayResize(g_st,     g_scanTotal); // Supertrend配列の初期化（追加）
+   ArrayResize(g_don,    g_scanTotal); // Donchian配列の初期化（追加）
    ArrayResize(g_LastAIInputs, g_scanTotal);  // AI入力配列の初期化（追加）
    ArrayResize(g_LastAIPreds,  g_scanTotal);  // AI予測配列の初期化（追加）
    ArrayResize(g_baseBar, g_scanTotal);
@@ -729,6 +735,11 @@ int OnInit()
       g_rsi[tk].ready  = false;  // RSI初期化（追加）
       g_rsi[tk].divDir = 0;
       g_rsi[tk].rsiNow = 50.0;
+      g_st[tk].ready   = false;  // Supertrend初期化（追加）
+      g_st[tk].dir     = 0;
+      g_don[tk].ready  = false;  // Donchian初期化（追加）
+      g_don[tk].dir    = 0;
+      g_don[tk].pos    = 0;
       g_transitionHoldRemaining[tk] = 0;
       g_hasUpdatedSinceInit[tk]     = false;
       g_lastTransitionLogBar[tk]    = 0;
@@ -1010,6 +1021,20 @@ void UpdateAndDraw()
       RSI_Compute(g_scan[i].symbol, g_scan[i].tf, g_rsi[i]);
      }
 
+   // Supertrendエンジンの計算ループ（追加）
+   for(int i = 0; i < g_scanTotal; i++)
+     {
+      if(!g_scan[i].ready) continue;
+      ST_Compute(g_scan[i].symbol, g_scan[i].tf, g_st[i]);
+     }
+
+   // Donchianエンジンの計算ループ（追加）
+   for(int i = 0; i < g_scanTotal; i++)
+     {
+      if(!g_scan[i].ready) continue;
+      DON_Compute(g_scan[i].symbol, g_scan[i].tf, g_don[i]);
+     }
+
    if(WLF_Enable)
      {
       for(int i = 0; i < g_scanTotal; i++)
@@ -1101,6 +1126,10 @@ void UpdateAndDraw()
          feat += TTM_Feat(g_ttm[i]);
          if(StringLen(feat) > 0) feat += ";";
          feat += RSI_Feat(g_rsi[i]);
+         if(StringLen(feat) > 0) feat += ";";
+         feat += ST_Feat(g_st[i]);
+         if(StringLen(feat) > 0) feat += ";";
+         feat += DON_Feat(g_don[i]);
 
          if(InpEMAAlignEnable)
            {
@@ -1491,6 +1520,14 @@ void UpdateAndDraw()
       // RSIダイバージェンス表示（追加）
       if(RSI_ShowInList && g_rsi[idx].ready)
          line += RSI_Text(g_rsi[idx]);
+
+      // Supertrend表示（一覧には出さない推奨設定 / ST_ShowInList が有効な場合のみ表示）
+      if(ST_ShowInList)
+         line += ST_Text(g_st[idx]);
+
+      // Donchian表示（一覧には出さない推奨設定 / DON_ShowInList が有効な場合のみ表示）
+      if(DON_ShowInList)
+         line += DON_Text(g_don[idx]);
 
       // EMA v2.0: 圧縮・強圧・超圧・発射・急変の全行にEMAサインを付ける
       if(InpEMAAlignEnable && (candKind[r] == 0 || candKind[r] == 1))
@@ -1912,6 +1949,27 @@ void DrawDetailPanel()
          clrs[L]  = (g_rsi[idx].divDir != 0) ? clrAqua : clrWhite; L++;
         }
 
+      // Supertrend（追加）
+      if(g_st[idx].ready)
+        {
+         lines[L] = StringFormat("  ST: %s %.5f (%d本継続%s)",
+                                 g_st[idx].dir > 0 ? "上昇" : "下降",
+                                 g_st[idx].line,
+                                 g_st[idx].trendBars,
+                                 g_st[idx].flipped ? " / 反転" : "");
+         clrs[L]  = (g_st[idx].dir > 0) ? clrDodgerBlue : clrHotPink; L++;
+        }
+
+      // Donchian（追加）
+      if(g_don[idx].ready)
+        {
+         lines[L] = StringFormat("  DON: %s (上%.5f / 下%.5f)",
+                                 g_don[idx].dir > 0 ? "上ブレイク" :
+                                 g_don[idx].dir < 0 ? "下ブレイク" : "レンジ内",
+                                 g_don[idx].upper, g_don[idx].lower);
+         clrs[L]  = (g_don[idx].dir > 0) ? clrDodgerBlue : (g_don[idx].dir < 0 ? clrHotPink : clrWhite); L++;
+        }
+
       REL_Result rrD;
       EVT_Info   evD;
       ComputeRowImminence(idx, rrD, evD);
@@ -1977,7 +2035,7 @@ void DrawDetailPanel()
                string m15Txt = (ea.slopeM15 > 0 ? "上向き" : (ea.slopeM15 < 0 ? "下向き" : "横ばい"));
                string m15Pos = (ea.pricePosM15 > 0 ? "M15 EMAより上" : (ea.pricePosM15 < 0 ? "M15 EMAより下" : "M15 EMA近"));
                lines[L] = StringFormat("    [EMA200 M15] %s / 価格は%s", m15Txt, m15Pos);
-               clrs[L] = base; L++;
+               clrs[L]  = base; L++;
               }
 
             if(InpEMAAlignUseH4)

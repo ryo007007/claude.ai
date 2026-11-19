@@ -2,7 +2,7 @@
 //|                                      AIPredictorTrainer.mqh        |
 //|  事後評価結果からAI重みを学習・更新するエンジン                    |
 //|  SignalLogger の results.csv を読み込み、勾配降下法で重み更新    |
-//|  HarmonicPattern 対応版（v1.1） / TTM対応                         |
+//|  HarmonicPattern 対応版（v1.1） / TTM / RSI / Supertrend / Donchian 対応 |
 //+------------------------------------------------------------------+
 #property strict
 
@@ -234,11 +234,21 @@ void AI_Trainer_ParseFeat(const string feat, double &features[]) {
    int evtMinSince = AI_ExtractInt(feat, "evt_since=", -1);
    features[AI_EVT_MIN_SINCE_LAST] = (evtMinSince >= 0 && evtMinSince <= 10) ? (1.0 - evtMinSince/10.0) : 0.0;
 
-   //--- TTM Squeeze (新規追加)
+   // TTM Squeeze
    features[AI_TTM_SQZ] = AI_ExtractBool(feat, "ttm_sqz=", false) ? 1.0 : 0.0;
    features[AI_TTM_RELEASED] = AI_ExtractBool(feat, "ttm_rel=", false) ? 1.0 : 0.0;
    features[AI_TTM_MOM_DIR] = AI_ExtractInt(feat, "ttm_dir=", 0);
    features[AI_TTM_MOM] = MathMax(-1.0, MathMin(1.0, AI_ExtractDouble(feat, "ttm_mom=", 0.0) * 100.0));
+
+   //--- Supertrend
+   features[AI_ST_DIR] = AI_ExtractInt(feat, "st_dir=", 0);
+   features[AI_ST_FLIP] = AI_ExtractBool(feat, "st_flip=", false) ? 1.0 : 0.0;
+   features[AI_ST_BARS] = MathMin(1.0, AI_ExtractDouble(feat, "st_bars=", 0.0) / 20.0);
+
+   //--- Donchian (新規追加)
+   features[AI_DON_DIR] = AI_ExtractInt(feat, "don_dir=", 0);
+   features[AI_DON_POS] = AI_ExtractInt(feat, "don_pos=", 0);
+   features[AI_DON_BREAK] = AI_ExtractBool(feat, "don_up=", false) || AI_ExtractBool(feat, "don_dn=", false) ? 1.0 : 0.0;
 }
 
 //+------------------------------------------------------------------+

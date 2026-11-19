@@ -3,7 +3,7 @@
 //|  軽量機械学習予測エンジン（線形回帰＋シグモイド）                 |
 //|  全圧縮状態で常時予測。案B。                                     |
 //|  統合エンジン: CCompression, EMA, SMD, Wick, RelatedPair,         |
-//|               EventTime, Ichimoku, TD, Wolfe, Harmonic, Volume, TTM, RSI |
+//|               EventTime, Ichimoku, TD, Wolfe, Harmonic, Volume, TTM, RSI, Supertrend, Donchian |
 //+------------------------------------------------------------------+
 #property strict
 
@@ -14,11 +14,11 @@ input int    AI_MinConfidence   = 50;     // 一覧に表示する最低信頼�
 input int    AI_HighConfidence  = 80;     // 高信頼度とみなす閾値(%)
 input bool   AI_AlertOnHighConf = true;   // 高信頼度でアラート
 input bool   AI_LogToSLG        = true;   // SignalLoggerに記録
-input string AI_ModelVersion    = "ml_v1.4"; // モデルバージョン (RSI統合版)
+input string AI_ModelVersion    = "ml_v1.6"; // モデルバージョン (Donchian統合版)
 input string AI_WeightFile      = "AIWeights.csv"; // 重みファイル名
 input double AI_LearningRate    = 0.01;   // 学習率（Trainer使用時）
 
-//--- 特徴量インデックス定数 (RSI統合版)
+//--- 特徴量インデックス定数 (Donchian統合版)
 enum ENUM_AI_FEATURE {
    AI_BIAS = 0,          // バイアス
    AI_EMA_DIR,           // EMA方向
@@ -88,7 +88,13 @@ enum ENUM_AI_FEATURE {
    AI_RSI_DIV_DIR,       // ダイバージェンス方向
    AI_RSI_RECENT,        // 直近ダイバージェンスか
    AI_RSI_STR,           // ダイバージェンス強さ
-   AI_FEATURE_COUNT      // 特徴量総数 (=66)
+   AI_ST_DIR,            // Supertrend方向
+   AI_ST_FLIP,           // 直近で反転したか
+   AI_ST_BARS,           // トレンド継続本数
+   AI_DON_DIR,           // Donchianブレイク方向
+   AI_DON_POS,           // 価格の位置 (上半分 / 下半分)
+   AI_DON_BREAK,         // 直近でブレイクしたか
+   AI_FEATURE_COUNT      // 特徴量総数 (=72)
 };
 
 //--- 入力構造体（全エンジン統合）
@@ -119,11 +125,19 @@ struct AI_Input {
    bool   ttmReleased;
    int    ttmMomDir;
    double ttmMomentum;
-   // RSI Divergence (新規)
+   // RSI Divergence
    double rsiNow;
    int    rsiDivDir;
    bool   rsiRecent;
    int    rsiStrength;
+   // Supertrend
+   int    stDir;
+   bool   stFlipped;
+   int    stBars;
+   // Donchian (新規)
+   int    donDir;
+   int    donPos;
+   bool   donBreak;
    // Ichimoku
    int    ichPos; bool ichThin; int ichBreakDir; int ichBreakAgo;
    int    ichRelDir; int ichBullRoles; int ichBearRoles; bool ichTwistAhead;
@@ -228,6 +242,12 @@ void AI_InitFeatureNames() {
    g_AI_FeatureNames[AI_RSI_DIV_DIR]    = "rsi_div_dir";
    g_AI_FeatureNames[AI_RSI_RECENT]     = "rsi_recent";
    g_AI_FeatureNames[AI_RSI_STR]        = "rsi_str";
+   g_AI_FeatureNames[AI_ST_DIR]         = "st_dir";
+   g_AI_FeatureNames[AI_ST_FLIP]        = "st_flip";
+   g_AI_FeatureNames[AI_ST_BARS]        = "st_bars";
+   g_AI_FeatureNames[AI_DON_DIR]        = "don_dir";
+   g_AI_FeatureNames[AI_DON_POS]        = "don_pos";
+   g_AI_FeatureNames[AI_DON_BREAK]      = "don_break";
 }
 
 //+------------------------------------------------------------------+
@@ -303,11 +323,19 @@ void AI_SetDefaultWeights() {
    g_AI_Weights[AI_TTM_RELEASED]   = +0.15; // 解除は方向ありの合図
    g_AI_Weights[AI_TTM_MOM_DIR]    = +0.30;  // モメンタム方向は強い
    g_AI_Weights[AI_TTM_MOM]        = +0.10;      // モメンタムの大きさ
-   //--- RSI Divergence (新規)
+   //--- RSI Divergence
    g_AI_Weights[AI_RSI_NOW]        = 0.0;        // RSI自体は方向なし (70超え / 30割れは別で見る)
    g_AI_Weights[AI_RSI_DIV_DIR]    = +0.30;  // ダイバージェンス方向は強い
    g_AI_Weights[AI_RSI_RECENT]     = +0.10;   // 直近なら少し強い
    g_AI_Weights[AI_RSI_STR]        = +0.10;      // 強さ
+   //--- Supertrend
+   g_AI_Weights[AI_ST_DIR]         = +0.25;   // トレンド方向は強い
+   g_AI_Weights[AI_ST_FLIP]        = +0.15;  // 直近の反転は合図
+   g_AI_Weights[AI_ST_BARS]        =  0.0;     // 継続本数は方向なし (長すぎると疲弊もある)
+   //--- Donchian (新規)
+   g_AI_Weights[AI_DON_DIR]        = +0.25;   // ブレイク方向は強い
+   g_AI_Weights[AI_DON_POS]        = +0.10;   // 価格の位置
+   g_AI_Weights[AI_DON_BREAK]      = +0.15; // 直近ブレイクは合図
 }
 
 //+------------------------------------------------------------------+
@@ -444,12 +472,20 @@ void AI_InputToFeatures(const AI_Input &in, double &features[]) {
    features[AI_TTM_RELEASED]   = in.ttmReleased ? 1.0 : 0.0;
    features[AI_TTM_MOM_DIR]    = in.ttmMomDir;
    features[AI_TTM_MOM]        = MathMax(-1.0, MathMin(1.0, in.ttmMomentum * 100.0));
-   //--- RSI Divergence (新規)
+   //--- RSI Divergence
    features[AI_RSI_NOW]        = (in.rsiNow - 50.0) / 50.0;
    features[AI_RSI_DIV_DIR]    = in.rsiDivDir;
    features[AI_RSI_RECENT]     = in.rsiRecent ? 1.0 : 0.0;
    features[AI_RSI_STR]        = in.rsiStrength / 100.0;
-}  
+   //--- Supertrend
+   features[AI_ST_DIR]         = in.stDir;
+   features[AI_ST_FLIP]        = in.stFlipped ? 1.0 : 0.0;
+   features[AI_ST_BARS]        = MathMin(1.0, in.stBars / 20.0);
+   //--- Donchian (新規)
+   features[AI_DON_DIR]        = in.donDir;
+   features[AI_DON_POS]        = in.donPos;
+   features[AI_DON_BREAK]      = in.donBreak ? 1.0 : 0.0;
+}
 
 //+------------------------------------------------------------------+
 //| 線形結合（Zスコア計算）                                            |
@@ -539,6 +575,18 @@ string AI_BuildRationale(const AI_Input &in, const double &features[]) {
    // RSI Divergence
    if(in.rsiRecent && in.rsiDivDir != 0)
       r += (in.rsiDivDir > 0 ? "RSI_DIV_BUY," : "RSI_DIV_SELL,");
+
+   // Supertrend
+   if(in.stFlipped && in.stDir != 0)
+      r += (in.stDir > 0 ? "ST_FLIP_UP," : "ST_FLIP_DOWN,");
+   else if(in.stDir != 0)
+      r += (in.stDir > 0 ? "ST_UP," : "ST_DOWN,");
+
+   // Donchian
+   if(in.donBreak && in.donDir != 0)
+      r += (in.donDir > 0 ? "DON_BREAK_UP," : "DON_BREAK_DOWN,");
+   else if(in.donPos != 0)
+      r += (in.donPos > 0 ? "DON_UPPER," : "DON_LOWER,");
 
    // 髭
    if(in.wickDetected && in.wickRatio >= 0.5) {
@@ -663,6 +711,10 @@ string AI_DetailText(const AI_Input &in, const AI_Prediction &p) {
                        in.ttmMomDir, in.ttmMomentum);
    s += StringFormat("RSI: now=%.1f div=%d recent=%d str=%d\n",
                        in.rsiNow, in.rsiDivDir, in.rsiRecent ? 1 : 0, in.rsiStrength);
+   s += StringFormat("ST: dir=%d flip=%d bars=%d\n",
+                       in.stDir, in.stFlipped ? 1 : 0, in.stBars);
+   s += StringFormat("DON: dir=%d pos=%d break=%d\n",
+                       in.donDir, in.donPos, in.donBreak ? 1 : 0);
 
    return s;
 }
