@@ -1128,3 +1128,14 @@ src/
 ---
 
 *— End of CCompression Specification v1.0 —*
+
+
+大事なとこだけ抜き出すと：
+
+・CCompression は触らない
+・リスト = 表示ホールド、詳細 = 実際状態
+・EMAは H4/D1 選択可、H4が上なら H1 EMA下は押し目買い候補
+・Exit Zone は表示-only、OrderSend は書かない
+・Reverse-target は常時ON、方向不明は消さない
+・Anomaly は注意書きのみ、スコアなし
+・デザインは内容固定後にやる
