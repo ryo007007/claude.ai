@@ -33,6 +33,7 @@
 #include "MarketEngines/DonchianEngine.mqh"      // Donchianエンジン（追加）
 #include "MarketEngines/AIPredictorEngine.mqh"
 #include "MarketEngines/AIPredictorTrainer.mqh"
+#include "MarketEngines/CExitZoneRRFilter.mqh"
 
 //---------------- 入力パラメタ ----------------
 input string InpSymbols = "USDJPY,EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,EURJPY,GBPJPY,AUDJPY,NZDJPY,CADJPY,CHFJPY,EURGBP,GBPCHF,EURCAD,EURCHF,AUDNZD,CADCHF,AUDCHF,GBPCAD,AUDCAD,EURAUD,GBPAUD,EURNZD,GOLD,BTCUSD,US30Cash,Nasdaq";
@@ -123,6 +124,12 @@ input int    WickHighlightWidth  = 5;         // 強調表示の枠線太さ
 input group "=== 髭検知 強調クリアボタン位置 ==="
 input int    WickBtnX = 100;  // ボタンX（右下隅からの距離。大きいほど左）
 input int    WickBtnY = 10;   // ボタンY（右下隅からの距離。大きいほど上）
+
+// input group "=== Exit Zone RRフィルタ (CExitZoneRRFilter.mqh 準拠・表示のみ) ==="
+// ・Inp_RR_Min       : 表示する最低RR(リスク1:リワードN)。スキャルピング=1.0 / デイトレ=2.0目安。RR不足や計算不可は非表示(RR_HIDDEN)
+// ・Inp_RR_Highlight : 強調(RR_HIGHLIGHT)とするRR基準値(リスク1:3以上)
+// ・Inp_RR_Star      : ★★強調(RR_STAR)とするRR基準値(リスク1:4以上 / 表示例: "RR 1:4.2 ★★")
+// ※実体の input 宣言は MarketEngines/CExitZoneRRFilter.mqh 側にあるため、重複宣言しないこと
 
 //---------------- ② その後にグローバル変数（型定義はすべてインクルード済み） ----------------
 string          g_symbols[];
@@ -552,6 +559,22 @@ bool PassFilter(const int kind, const CCOMP_STATE dispState)
    return true;
   }
 
+// 同じ通貨ペアで、圧縮している時間足が何個あるか数える
+// 例：AUDUSD M30が圧縮で、AUDUSD M5も圧縮なら、2個
+int CascadeCount(const string sym)
+  {
+   int cnt = 0;
+   for(int k = 0; k < g_scanTotal; k++)
+     {
+      if(g_scan[k].symbol != sym) continue;
+      if(!g_scan[k].ready) continue;
+      CCOMP_STATE st = DisplayStateForRow(k);
+      if(st == CCOMP_COMPRESSION || st == CCOMP_STRONG_COMPRESSION || st == CCOMP_TIGHT_COMPRESSION || st == CCOMP_TRANSITION)
+         cnt++;
+     }
+   return cnt;
+  }
+
 string FilterModeText()
   {
    if(g_filterMode == 1) return "表示: 発射のみ";
@@ -721,7 +744,7 @@ int OnInit()
    ArrayResize(g_lastOutcomeTime, g_scanTotal);
    ArrayResize(g_emaAlign, g_symbolCount); // symbol分だけ
 
-   for(int tk = 0; tk < g_scanTotal; tk++)
+for(int tk = 0; tk < g_scanTotal; tk++)
      {
       g_tdBar[tk]      = 0;
       g_td[tk].ready   = false;
@@ -749,15 +772,13 @@ int OnInit()
       g_verification[tk].active     = false;
       g_lastOutcome[tk]             = "";
       g_lastOutcomeTime[tk]         = 0;
+      g_spikeUntil[tk]              = 0;
+      g_spikeUp[tk]                 = false;
+      g_spikeRatio[tk]              = 0.0;
+      g_spikeZ[tk]                  = 0.0;
+      g_suppressed[tk]              = false;
      }
-   for(int k = 0; k < g_scanTotal; k++)
-     {
-      g_spikeUntil[k] = 0;
-      g_spikeUp[k]    = false;
-      g_spikeRatio[k] = 0.0;
-      g_spikeZ[k]     = 0.0;
-      g_suppressed[k] = false;
-     }
+   
 
    for(int si = 0; si < g_symbolCount; si++)
       for(int ti = 0; ti < g_tfCount; ti++)
@@ -1360,66 +1381,6 @@ void UpdateAndDraw()
 
       if(!PassFilter(0, dispState)) continue;
 
-      // 逆向きフィルター (常にON)
-      // 方向が決まらない行は、そのまま出す
-      // 逆向きが確定した行だけ、出さない
-      {
-       // 方向を決める：その行の Supertrend → AI → EMA の順
-       int dirRow = 0;
-       if(g_st[i].ready && g_st[i].dir != 0)
-          dirRow = g_st[i].dir;
-
-       // AI：その行の予測があれば使う (g_LastAIPreds があれば)
-       if(dirRow == 0 && AI_Enable)
-         {
-          // AI_Integration_Patch の配列名に合わせてください
-          // g_LastAIPreds[i].direction が無い場合は、このブロックを飛ばす
-          // ここでは ST / EMA だけでも動くように、コンパイルエラーになる場合は削除してください
-          #ifdef AI_HAS_ROW_PRED
-          if(g_LastAIPreds[i].direction != 0)
-             dirRow = g_LastAIPreds[i].direction;
-          #endif
-         }
-
-       if(dirRow == 0)
-         {
-          int siRow = i / g_tfCount;
-          if(siRow >= 0 && siRow < g_symbolCount && g_emaAlign[siRow].ready && g_emaAlign[siRow].dir != 0)
-             dirRow = g_emaAlign[siRow].dir;
-         }
-
-       if(dirRow != 0)
-         {
-          double atrRow = 0.0;
-          double atrBufRow[1];
-          if(CopyBuffer(g_scan[i].atrHandle, 0, 1, 1, atrBufRow) == 1)
-             atrRow = atrBufRow[0];
-          if(atrRow <= 0.0 && g_scan[i].atrPct > 0.0)
-            {
-             double pxRow = iClose(g_scan[i].symbol, g_scan[i].tf, 1);
-             if(pxRow > 0.0) atrRow = pxRow * g_scan[i].atrPct / 100.0;
-            }
-
-          double stLineRow = (g_st[i].ready) ? g_st[i].line : 0.0;
-          double donUpRow = (g_don[i].ready) ? g_don[i].upper : 0.0;
-          double donDnRow = (g_don[i].ready) ? g_don[i].lower : 0.0;
-
-          EXIT_Result rRow;
-          if(EXIT_Compute(g_scan[i].symbol, g_scan[i].tf, dirRow,
-                          atrRow, stLineRow, donUpRow, donDnRow, rRow))
-            {
-             if(!EXIT_IsValid(rRow))
-               {
-                // 逆向き確定 → 一覧に出さない
-                // 急変で抑止されてる行と同じ扱いにする
-                continue;
-               }
-            }
-          // EXIT_Compute が false (ATRが取れない等) → 方向が決まらないのと同じ扱いで、そのまま出す
-         }
-       // dirRow == 0 → 方向が決まらない → そのまま出す
-      }
-
       candIdx[n]  = i;
       candKind[n] = 0;
       double baseKey = (double)g_scan[i].score;
@@ -1431,6 +1392,11 @@ void UpdateAndDraw()
          baseKey = rrK.pct / 12.5;
         }
       candKey[n]  = (dispState == CCOMP_TRANSITION) ? (100.0 + TransitionRankingScore(i)) : baseKey;
+      // 連鎖：同じ通貨ペアで、圧縮している時間足が多いほど、上に持ってくる
+      // M30だけ圧縮 = +0、M30+M5圧縮 = +50、3つ以上圧縮 = +80
+      int cascade = CascadeCount(g_scan[i].symbol);
+      if(cascade >= 3) candKey[n] += 80.0;
+      else if(cascade == 2) candKey[n] += 50.0;
       if(HARM_Enable && g_harm[i].found) nHarm++;
       n++;
      }
@@ -1627,6 +1593,18 @@ void UpdateAndDraw()
            }
         }
 
+      // 連鎖表示：大きい時間足が圧縮のとき、小さい時間足も圧縮してたら強調
+      int cascadeShow = CascadeCount(inst.symbol);
+      if(candKind[r] == 0 && cascadeShow >= 2)
+        {
+         string cascadeMark = (cascadeShow >= 3) ? " ★★連鎖" : " ★連鎖";
+         // 行の後ろに足す。色は、そのまま（行の色を変えない）
+         line += cascadeMark + StringFormat("(%d足)", cascadeShow);
+         // 連鎖してたら、行の色を明るくする（見やすくするため）
+         if(cascadeShow >= 3) rowClr = clrAqua;
+         else if(rowClr == clrWhite) rowClr = clrYellow;
+        }
+
       // AI予測を追加
       string feat = StringFormat("score=%d;delta=%d", inst.score, inst.delta);
       AI_UpdateRow(idx, candKind[r], line, rowClr, feat);
@@ -1711,7 +1689,29 @@ void UpdateAndDraw()
 
          if(EXIT_Compute(_Symbol, (ENUM_TIMEFRAMES)_Period, exitDir,
                          atrExit, stLineExit, donUpExit, donDnExit, g_exit))
+           {
+            double entryPrice = (exitDir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                              : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            double slPrice = g_exit.sl;
+
+            // ★ TP1 ではなく、TP2（一番遠いターゲット）で RR を測る
+            // TP1 は近いから RR が小さくて当たり前。TP1 で測ると全部消える
+            double tpPrice = g_exit.tp2;
+            if(tpPrice == 0.0) tpPrice = g_exit.tp1; // TP2 が無いときだけ TP1 を使う
+
+            ENUM_RR_LEVEL rrLevel = RR_GetLevel(entryPrice, tpPrice, slPrice);
+
+            // ★ RR不足でも EXIT_Clear() しない。前のように表示は残す
+            // フィルタは「リストに出すか」ではなく「強調するか」だけに使う
+            // → 前のように SL / TP が表示される
             EXIT_Draw(g_exit);
+
+            // 確認用：なぜ消えていたか、ログに出す
+            if(EXIT_Debug)
+               PrintFormat("[RR] dir=%d entry=%.5f tp2=%.5f sl=%.5f RR=%.2f level=%d",
+                           exitDir, entryPrice, tpPrice, slPrice,
+                           RR_Calc(entryPrice, tpPrice, slPrice), (int)rrLevel);
+           }
          else
             EXIT_Clear();
         }
@@ -2383,7 +2383,7 @@ void DrawDetailPanel()
       lines[L] = StringFormat("  %s", EXIT_Text(g_exit));
       clrs[L] = clrWhite; L++;
       lines[L] = "  使い方: ポジションの損切り線を赤帯まで、利確線を緑/青帯までドラッグ";
-      clrs[L] = clrGray; L++;
+      clrs[L] = clrWhite; L++;
      }
 
    for(int j = 0; j < L; j++)

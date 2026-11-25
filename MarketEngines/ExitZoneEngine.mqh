@@ -6,16 +6,16 @@
 #property strict
 
 input group "=== 損切り・利確ゾーン ==="
-input bool   EXIT_Enable       = true;
-input double EXIT_SL_ATR_Mult  = 1.5;
-input double EXIT_TP1_R        = 1.0;
-input double EXIT_TP2_R        = 2.0;
-input bool   EXIT_UseST_Trail  = true;
-input bool   EXIT_ShowZones    = true;
-input bool   EXIT_Debug        = false; // 確認が終わったら false にしてください
-input color  EXIT_SL_Color     = clrRed;
-input color  EXIT_TP1_Color    = clrLime;
-input color  EXIT_TP2_Color    = clrDodgerBlue;
+input bool   EXIT_Enable       = true;         // 損切り・利確を表示リスク1：リワード2以上が良（スキャルピング1：1も可）
+input double EXIT_SL_ATR_Mult  = 1.5;          // 損切りまでの距離R（ATRの倍数）NY時間多め
+input double EXIT_TP1_R        = 1.0;          // 利確1の距離（近いほう）Rの倍数
+double EXIT_TP2_R              = 2.0;          // 利確2までの距離（遠いほう）Rの倍数
+input bool   EXIT_UseST_Trail  = true;         // 利益が出たら、利確を伸ばして追う
+input bool   EXIT_ShowZones    = true;         // 色の帯で表示する
+input bool   EXIT_Debug        = false;        // 確認用のログ出し、確認終了後falseにして軽くする
+input color  EXIT_SL_Color     = clrRed;       // 損切りの色（赤）
+input color  EXIT_TP1_Color    = clrLime;      // 利確1の色（緑）
+input color  EXIT_TP2_Color    = clrDodgerBlue;// 利確2の色（青）
 
 struct EXIT_Result
   {
@@ -92,21 +92,44 @@ bool EXIT_Compute(const string symbol, const ENUM_TIMEFRAMES tf, const int dir,
    r.hasPos = hasPos;
    r.posPrice = posPrice;
 
+   // 入値は、方向が決まったときに固定する。毎ティック、今の価格で動かさない
+   static int lastLockDir = 0;
+   static double lockAsk = 0.0;
+   static double lockBid = 0.0;
+
    double entryAsk = 0.0;
    double entryBid = 0.0;
    double entry = 0.0;
 
+   if(hasPos)
+     {
+      // ポジションがあるときは、実際の入値を使う
+      entryAsk = posPrice;
+      entryBid = posPrice;
+      entry = posPrice;
+      lastLockDir = dir;
+      lockAsk = entryAsk;
+      lockBid = entryBid;
+     }
+   else if(dir != lastLockDir || lockAsk <= 0.0)
+     {
+      // 方向が変わったときだけ、入値を取り直す
+      lastLockDir = dir;
+      lockAsk = ask;
+      lockBid = bid;
+     }
+
    if(dir > 0)
      {
-      // 買い：入るのは Ask
-      entryAsk = hasPos ? posPrice : ask;
+      // 買い：入るのは Ask（固定した入値を使う）
+      entryAsk = hasPos ? posPrice : lockAsk;
       entryBid = entryAsk - spread;
       entry = entryAsk;
      }
    else
      {
-      // 売り：入るのは Bid
-      entryBid = hasPos ? posPrice : bid;
+      // 売り：入るのは Bid（固定した入値を使う）
+      entryBid = hasPos ? posPrice : lockBid;
       entryAsk = entryBid + spread;
       entry = entryBid;
      }
@@ -140,10 +163,13 @@ bool EXIT_Compute(const string symbol, const ENUM_TIMEFRAMES tf, const int dir,
       double tp1 = base + oneR * EXIT_TP1_R;
       r.tp1 = tp1; r.tp1Top = tp1 + half; r.tp1Bot = tp1 - half;
 
-      double tp2ATR = base + oneR * EXIT_TP2_R;
+      double tp2R = MathMax(2.0, EXIT_TP1_R + 1.0);
+      double tp2ATR = base + oneR * tp2R;
       double tp2 = tp2ATR;
       // Donchian上バンドは Bidベースなので、そのまま比べられる
-      if(donUpper > 0.0 && donUpper > base && donUpper < tp2ATR) tp2 = donUpper;
+      // ただし、利確1に近すぎたら、Donchianは無視する
+      if(donUpper > 0.0 && donUpper > base && donUpper < tp2ATR && donUpper > tp1 + oneR * 0.5) tp2 = donUpper;
+      if(tp2 < tp1 + oneR * 0.5) tp2 = tp1 + oneR * 0.5;
       r.tp2 = tp2; r.tp2Top = tp2 + half; r.tp2Bot = tp2 - half;
      }
    else
@@ -165,14 +191,17 @@ bool EXIT_Compute(const string symbol, const ENUM_TIMEFRAMES tf, const int dir,
       double tp1 = base - oneR * EXIT_TP1_R;
       r.tp1 = tp1; r.tp1Top = tp1 + half; r.tp1Bot = tp1 - half;
 
-      double tp2ATR = base - oneR * EXIT_TP2_R;
+      double tp2R = MathMax(2.0, EXIT_TP1_R + 1.0);
+      double tp2ATR = base - oneR * tp2R;
       double tp2 = tp2ATR;
       // Donchian下バンドは Bidベース → Ask に直して比べる
+      // ただし、利確1に近すぎたら、Donchianは無視する
       if(donLower > 0.0)
         {
          double donLowerAsk = donLower + spread;
-         if(donLowerAsk < base && donLowerAsk > tp2ATR) tp2 = donLowerAsk;
+         if(donLowerAsk < base && donLowerAsk > tp2ATR && donLowerAsk < tp1 - oneR * 0.5) tp2 = donLowerAsk;
         }
+      if(tp2 > tp1 - oneR * 0.5) tp2 = tp1 - oneR * 0.5;
       r.tp2 = tp2; r.tp2Top = tp2 + half; r.tp2Bot = tp2 - half;
      }
 
