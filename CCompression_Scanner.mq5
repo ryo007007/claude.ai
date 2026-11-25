@@ -744,7 +744,7 @@ int OnInit()
    ArrayResize(g_lastOutcomeTime, g_scanTotal);
    ArrayResize(g_emaAlign, g_symbolCount); // symbol分だけ
 
-for(int tk = 0; tk < g_scanTotal; tk++)
+   for(int tk = 0; tk < g_scanTotal; tk++)
      {
       g_tdBar[tk]      = 0;
       g_td[tk].ready   = false;
@@ -778,7 +778,6 @@ for(int tk = 0; tk < g_scanTotal; tk++)
       g_spikeZ[tk]                  = 0.0;
       g_suppressed[tk]              = false;
      }
-   
 
    for(int si = 0; si < g_symbolCount; si++)
       for(int ti = 0; ti < g_tfCount; ti++)
@@ -2126,7 +2125,7 @@ void DrawDetailPanel()
 
             string h4Txt = !InpEMAAlignUseH4 ? "判定外" : (ea.slopeH4 > 0 ? "上向き" : (ea.slopeH4 < 0 ? "下向き" : "横ばい"));
             string h1Txt = (ea.slopeH1 > 0 ? "上向き" : (ea.slopeH1 < 0 ? "下向き" : "横ばい"));
-            string posTxt = (ea.pricePos > 0 ? "H1 EMAより上" : (ea.pricePos < 0 ? "H1 EMAり下" : "H1 EMA付近"));
+            string posTxt = (ea.pricePos > 0 ? "H1 EMAより上" : (ea.pricePos < 0 ? "H1 EMAより下" : "H1 EMA付近"));
             string alignTxt = (ea.dir > 0 ? " → 押し目条件成立" : (ea.dir < 0 ? " → 戻り条件成立" : " → 条件なし"));
             lines[L] = StringFormat("  [EMAアライメント v2.0] H4 %s / H1 %s / 価格は%s%s",
                                     h4Txt, h1Txt, posTxt, alignTxt);
@@ -2227,7 +2226,7 @@ void DrawDetailPanel()
            }
          else
            {
-            lines[L] = "  判定：トレンドの疲弊を示唆。押し目し目買い/戻り売りのタイミングを窺っています。";
+            lines[L] = "  判定：トレンドの疲弊を示唆。押し目買い/戻り売りのタイミングを窺っています。";
             clrs[L]  = clrWhite; L++;
            }
         }
