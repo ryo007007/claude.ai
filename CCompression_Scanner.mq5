@@ -51,7 +51,7 @@ input group "=== 表示設定 ==="
 input int  PanelX           = 10;   // パネルX座標
 input int  PanelY           = 20;   // パネルY座標
 input int  MaxRows          = 40;   // 最大表示行数
-input int  RefreshSeconds   = 1;    // 再計算の最小間隔(秒)
+input int  RefreshSeconds   = 2;    // 再計算の最小間隔(秒)
 input bool OpenInNewChart   = false; // trueなら新規チャート、falseなら現在のチャートを切替
 
 input group "=== TRANSITION表示保持・事後計測設定 ==="
@@ -156,6 +156,7 @@ bool            g_suppressed[];
 bool            g_logOn      = true;
 bool            g_statsOn    = true;
 int             g_filterMode = 0; // 0=全部 1=発射 2=急変 3=超圧 4=強圧 5=圧縮
+int             g_page = 0; // 0=1ページ目、1=2ページ目...
 
 // 予兆スコア計算用
 int             g_immScore[];
@@ -916,6 +917,9 @@ bool ShouldDisplay(const CCOMP_STATE st)
    return ShowCompression;
   }
 
+string g_lastRowText[];
+color  g_lastRowColor[];
+
 void DrawRow(const int r, const string text, const color clr)
   {
    string name = "CCOMP_Scan_Row_" + IntegerToString(r);
@@ -930,6 +934,20 @@ void DrawRow(const int r, const string text, const color clr)
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
      }
+
+   // 同じ文字なら書き換えない。チカチカの原因はここ
+   if(ArraySize(g_lastRowText) <= r)
+     {
+      ArrayResize(g_lastRowText, r + 1);
+      ArrayResize(g_lastRowColor, r + 1);
+      g_lastRowText[r] = "";
+     }
+   if(g_lastRowText[r] == text && g_lastRowColor[r] == clr)
+      return; // 変わってないなら何もしない
+
+   g_lastRowText[r] = text;
+   g_lastRowColor[r] = clr;
+
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PanelX);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY + 18 + r * 15);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
@@ -1444,10 +1462,18 @@ if(InpEMAAlignEnable)
         }
      }
 
-   int shown = MathMin(n, MaxRows);
+   // 40行が限界。ページで、めくる
+   // フィルタが変わったら、1ページ目に、戻る（ボタンのところで、やる）
+   int pageStart = g_page * MaxRows;
+   if(pageStart >= n && n > 0) { g_page = 0; pageStart = 0; } // ページが、行き過ぎたら、1ページ目に、戻る
+   int pageEnd = MathMin(n, pageStart + MaxRows);
+   int shown = pageEnd - pageStart;
 
-   string title = StringFormat("CCompression Scanner (v1.52) (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
-                                n - nSpike - nWolfe, nSpike, nWolfe, nHarm, g_scanTotal);
+   int totalPages = (n + MaxRows - 1) / MaxRows;
+   if(totalPages < 1) totalPages = 1;
+   string title = StringFormat("CCompression Scanner (v1.52) [%d/%dページ %d件中 %d〜%d件] (圧縮%d件 急変%d件 ウォルフ%d件 ハーモニック%d件 / 全%d組)",
+                               g_page + 1, totalPages, n, (n == 0 ? 0 : pageStart + 1), pageEnd,
+                               n - nSpike - nWolfe, nSpike, nWolfe, nHarm, g_scanTotal);
    {
       string tname = "CCOMP_Scan_Title";
       if(ObjectFind(0, tname) < 0)
@@ -1466,14 +1492,16 @@ if(InpEMAAlignEnable)
       ObjectSetInteger(0, tname, OBJPROP_COLOR, clrWhite);
    }
 
-   ObjectsDeleteAll(0, "CCOMP_Scan_Row_");
+   // チカチカ防止：行は全部さない。余った行だけ後で消す
+   // ObjectsDeleteAll(0, "CCOMP_Scan_Row_");
    ArrayResize(g_rowSymbol, shown);
    ArrayResize(g_rowTF, shown);
    g_rowCount = shown;
 
    for(int r = 0; r < shown; r++)
      {
-      int idx = candIdx[r];
+      int idx = candIdx[pageStart + r]; // ← ページ分、ずらす
+      int kind = candKind[pageStart + r]; // ← ページ分、ずらす
       CCOMP_Instance inst = g_scan[idx];
 
       string tfName = EnumToString(inst.tf);
@@ -1481,14 +1509,14 @@ if(InpEMAAlignEnable)
 
       string line;
       color  rowClr;
-      if(candKind[r] == 1)
+      if(kind == 1)
         {
          line = StringFormat("%-9s %-4s %-6s ATR比%.1f Z%+.1f",
             inst.symbol, tfName, g_spikeUp[idx] ? "急変↑" : "急変↓",
             g_spikeRatio[idx], g_spikeZ[idx]);
          rowClr = g_spikeUp[idx] ? SpikeUpColor : SpikeDownColor;
         }
-      else if(candKind[r] == 2)
+      else if(kind == 2)
         {
          line = StringFormat("%-9s %-4s %-6s", inst.symbol, tfName, "ウォルフ");
          rowClr = (g_wlf[idx].dir > 0) ? WLF_ColorBuy : WLF_ColorSell;
@@ -1503,8 +1531,8 @@ if(InpEMAAlignEnable)
             int transitionRank = 1;
             for(int q = 0; q < r; q++)
               {
-               int prevIdx = candIdx[q];
-               if(candKind[q] == 0 && DisplayStateForRow(prevIdx) == CCOMP_TRANSITION)
+               int prevIdx = candIdx[pageStart + q];
+               if(candKind[pageStart + q] == 0 && DisplayStateForRow(prevIdx) == CCOMP_TRANSITION)
                   transitionRank++;
               }
 
@@ -1578,7 +1606,7 @@ if(InpEMAAlignEnable)
          line += DON_Text(g_don[idx]);
 
       // EMA v2.0: 圧縮・強圧・超圧・発射・急変の全行にEMAサインを付ける
-      if(InpEMAAlignEnable && (candKind[r] == 0 || candKind[r] == 1))
+      if(InpEMAAlignEnable && (kind == 0 || kind == 1))
         {
          int siEMA = idx / g_tfCount;
          if(g_emaAlign[siEMA].ready && g_emaAlign[siEMA].dir != 0)
@@ -1598,7 +1626,7 @@ if(InpEMAAlignEnable)
             if(InpEMAAlignShowDivergence && g_emaAlign[siEMA].divergence != 0)
                emaMark += (g_emaAlign[siEMA].divergence > 0 ? "↗" : "↘");
 
-            if(candKind[r] == 1)
+            if(kind == 1)
               {
                line += emaMark;
               }
@@ -1613,7 +1641,7 @@ if(InpEMAAlignEnable)
 
       // 連鎖表示：大きい時間足が圧縮のとき、小さい時間足も圧縮してたら強調
       int cascadeShow = CascadeCount(inst.symbol);
-      if(candKind[r] == 0 && cascadeShow >= 2)
+      if(kind == 0 && cascadeShow >= 2)
         {
          string cascadeMark = (cascadeShow >= 3) ? " ★★連鎖" : " ★連鎖";
          // 行の後ろに足す。色は、そのまま（行の色を変えない）
@@ -1636,7 +1664,7 @@ if(InpEMAAlignEnable)
 
       // AI予測を追加
       string feat = StringFormat("score=%d;delta=%d", inst.score, inst.delta);
-      AI_UpdateRow(idx, candKind[r], line, rowClr, feat);
+      AI_UpdateRow(idx, kind, line, rowClr, feat);
 
       DrawRow(r, line, rowClr);
 
@@ -1644,7 +1672,20 @@ if(InpEMAAlignEnable)
       g_rowTF[r]     = inst.tf;
      }
 
-   if(n > shown)
+// 余った行を削除する（40件→10件に減ったとき、11行目〜40行目が残るのを防ぐ）
+   for(int r = shown; r < MaxRows; r++)
+     {
+      string oldName = "CCOMP_Scan_Row_" + IntegerToString(r);
+      if(ObjectFind(0, oldName) >= 0)
+         ObjectDelete(0, oldName);
+      if(ArraySize(g_lastRowText) > r)
+        {
+         g_lastRowText[r] = "";
+         g_lastRowColor[r] = clrNONE;
+        }
+     }
+     
+   if(pageEnd < n)
      {
       string moreName = "CCOMP_Scan_More";
       if(ObjectFind(0, moreName) < 0)
@@ -1658,7 +1699,7 @@ if(InpEMAAlignEnable)
         }
       ObjectSetInteger(0, moreName, OBJPROP_XDISTANCE, PanelX);
       ObjectSetInteger(0, moreName, OBJPROP_YDISTANCE, PanelY + 18 + shown * 14);
-      ObjectSetString(0, moreName, OBJPROP_TEXT, StringFormat("...他 %d件", n - shown));
+      ObjectSetString(0, moreName, OBJPROP_TEXT, StringFormat("...他 %d件", n - pageEnd));
       ObjectSetInteger(0, moreName, OBJPROP_COLOR, clrGray);
      }
    else
@@ -1812,8 +1853,25 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(sparam == "CCOMP_Scan_BtnFilter")
      {
       g_filterMode = (g_filterMode + 1) % 6; // 0→1→2→3→4→5→0
+      g_page = 0; // フィルタを変えたら、1ページ目に、戻る
       GlobalVariableSet("CCOMP_UI_FILTER", (double)g_filterMode);
       UpdateAndDraw(); // 押した瞬間に一覧を再描画
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      return;
+     }
+
+   if(sparam == "CCOMP_Scan_BtnNext")
+     {
+      g_page++; // 次へ。行き過ぎたら、表示のところで、1ページ目に、戻る
+      UpdateAndDraw();
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      return;
+     }
+
+   if(sparam == "CCOMP_Scan_BtnPrev")
+     {
+      if(g_page > 0) g_page--; // 前へ。1ページ目なら、動かない
+      UpdateAndDraw();
       ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       return;
      }
@@ -2462,6 +2520,10 @@ void DrawUiButton(const string name, const int x, const string text, const color
 
 void DrawStatsPanel()
   {
+   // ページボタン
+   DrawUiButton("CCOMP_Scan_BtnPrev", StatsX + 660, "◀ 前へ", C'40,70,110');
+   DrawUiButton("CCOMP_Scan_BtnNext", StatsX + 792, "次へ ▶", C'40,70,110');
+
    DrawUiButton("CCOMP_Scan_BtnFilter", StatsX,
                 FilterModeText(),
                 g_filterMode == 0 ? C'40,70,110' : C'110,70,40');
