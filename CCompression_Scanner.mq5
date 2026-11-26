@@ -743,7 +743,9 @@ int OnInit()
    ArrayResize(g_lastOutcome, g_scanTotal);
    ArrayResize(g_lastOutcomeTime, g_scanTotal);
    ArrayResize(g_emaAlign, g_symbolCount); // symbol分だけ
-
+   for(int si0 = 0; si0 < g_symbolCount; si0++)
+    ZeroMemory(g_emaAlign[si0]); // ← ゴミを消す。ready=false, eqs=0 になる
+   
    for(int tk = 0; tk < g_scanTotal; tk++)
      {
       g_tdBar[tk]      = 0;
@@ -925,7 +927,7 @@ void DrawRow(const int r, const string text, const color clr)
       ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
      }
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PanelX);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY + 18 + r * 14);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY + 18 + r * 15);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
   }
@@ -982,15 +984,28 @@ void UpdateAndDraw()
      }
 
    // EMA v2.0: symbolごとに1回計算（3スロープ期間 + M15対応）をここで実行
-   if(InpEMAAlignEnable)
-     {
-      for(int si = 0; si < g_symbolCount; si++)
-         EMA_AlignCompute(g_symbols[si], InpEMAAlignPeriod,
-                          InpEMAAlignSlopeBarsShort, InpEMAAlignSlopeBarsMed, InpEMAAlignSlopeBarsLong,
-                          InpEMAAlignUseD1, InpEMAAlignUseH4, InpEMAAlignUseM15,
-                          g_emaAlign[si]);
-     }
 
+if(InpEMAAlignEnable)
+  {
+   for(int si = 0; si < g_symbolCount; si++)
+     {
+      EMA_ALIGN_Result tmp;
+      ZeroMemory(tmp); // ← ゴミを消す
+      // 成功したときだけ、上書きする。失敗したら、前のいい結果を残す
+      if(EMA_AlignCompute(g_symbols[si], InpEMAAlignPeriod,
+                    InpEMAAlignSlopeBarsShort, InpEMAAlignSlopeBarsMed, InpEMAAlignSlopeBarsLong,
+                    InpEMAAlignUseD1, InpEMAAlignUseH4, InpEMAAlignUseM15,
+                    tmp))
+      {
+        g_emaAlign[si] = tmp;
+        PrintFormat("[EMA-DBG] %s ok ready=%d dir=%d pricePos=%d distH4=%.5f atrH4=%.5f eqs=%d",
+               g_symbols[si], (int)tmp.ready, tmp.dir, tmp.pricePos, tmp.distH4, tmp.atrH4, tmp.eqs);
+      }
+    else
+       PrintFormat("[EMA-DBG] %s FAIL ready=%d dir=%d", g_symbols[si], (int)tmp.ready, tmp.dir);
+     }
+  }
+   
    EVT_Refresh();
    REL_Update();
 
@@ -1025,11 +1040,11 @@ void UpdateAndDraw()
      }
 
    // 出来高エンジンの計算ループ追加
-   for(int i = 0; i < g_scanTotal; i++)
-     {
+   for(int i = 0; i < g_scanTotal; i++) 
+   {
       if(!g_scan[i].ready) continue;
-      VOL_Compute(g_scan[i].symbol, g_scan[i].tf, g_vol[i]);
-     }
+      VOL_Compute(g_scan[i].symbol, g_scan[i].tf, g_vol[i]); // 1秒ごとに毎回実行される
+   }
 
    // TTM Squeezeエンジンの計算ループ追加 (追加)
    for(int i = 0; i < g_scanTotal; i++)
@@ -1604,6 +1619,17 @@ void UpdateAndDraw()
          else if(rowClr == clrWhite) rowClr = clrYellow;
         }
 
+     // リスト：もう計算済みの g_emaAlign を使い回す。行ごとに再計算しない
+     {
+      double push = 50.0, pull = 50.0;
+      int siEMA = idx / g_tfCount;
+      bool emaOk = (siEMA >= 0 && siEMA < g_symbolCount && g_emaAlign[siEMA].ready);
+      if(emaOk && EMA_PullbackPctFromAlign(g_emaAlign[siEMA], push, pull))
+         line += StringFormat("（押し%.0f%%戻し%.0f%%）", push, pull);
+      else
+         line += "（押し-戻し-）";
+     }   
+
       // AI予測を追加
       string feat = StringFormat("score=%d;delta=%d", inst.score, inst.delta);
       AI_UpdateRow(idx, candKind[r], line, rowClr, feat);
@@ -2173,6 +2199,21 @@ void DrawDetailPanel()
                                        trendAlign ? " → 3期間揃い(強トレンド)" : "");
                clrs[L] = trendAlign ? clrAqua : base; L++;
               }
+
+            // 詳細パネル：もう計算済みの g_emaAlign[siD] から押し目買い % / 戻り売り % を1行で出す
+            {
+             double pushD = 50.0, pullD = 50.0;
+             if(EMA_PullbackPctFromAlign(ea, pushD, pullD))
+                lines[L] = StringFormat("    押し目買い %.0f%% / 戻り売り %.0f%%", pushD, pullD);
+             else
+                lines[L] = "    押し目買い - / 戻り売り -（計算未完了）";
+             clrs[L] = base; L++;
+            }
+           }
+         else
+           {
+            lines[L] = "    押し目買い - / 戻り売り -（計算未完了）";
+            clrs[L] = base; L++;
            }
         }
 

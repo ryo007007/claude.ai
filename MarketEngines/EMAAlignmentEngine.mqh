@@ -97,6 +97,8 @@ int EMA_AlignHandleIndex(const string symbol, const int emaPeriod,
          return i;
         }
 
+   SymbolSelect(symbol, true); // ←気配値に出す。無かったら、iMA が -1 になる
+
    int idx = ArraySize(g_emaHandles);
    ArrayResize(g_emaHandles, idx + 1);
    g_emaHandles[idx].symbol  = symbol;
@@ -404,4 +406,133 @@ string EMA_AlignFeat(const EMA_ALIGN_Result &r)
                        r.dir, r.depthScore, r.trendStrength, r.alignmentScore, r.divergence, r.eqs, r.zoneLabel, r.dynamicATRMult,
                        r.slopeH4, r.slopeH4Med, r.slopeH4Long, r.slopeH1, r.slopeM15, r.slopeD1,
                        r.pricePos, r.pricePosH4, r.pricePosM15, r.emaH4, r.emaH1, r.emaM15, r.price, r.atrH4, r.distH4);
+  }
+
+//+------------------------------------------------------------------+
+// 押し目買い % / 戻り売り % を計算する（EMAだけ）
+// push = 押し目買い %、pull = 戻り売り %
+// 50 / 50 = 分からない・見送り。勝率ではない
+bool EMA_PullbackPct(const string symbol,
+                     const ENUM_TIMEFRAMES tfTrend, // H4
+                     const ENUM_TIMEFRAMES tfPull,  // H1
+                     double &pushPct, double &pullPct)
+  {
+   pushPct = 50.0;
+   pullPct = 50.0;
+
+   // すでにあるハンドルを使う。毎回作り直さない
+   int hi = EMA_AlignHandleIndex(symbol, 200, false, true, false);
+   if(hi < 0) return false;
+   int hTrend = g_emaHandles[hi].hH4;
+   int hPull  = g_emaHandles[hi].hH1;
+   int hAtr   = g_emaHandles[hi].hATRH4;
+   if(hTrend <= 0 || hPull <= 0 || hAtr <= 0) return false;
+
+   double emaTrendNow[1], emaTrendOld[1];
+   double emaPullNow[1];
+   double atrBuf[1];
+   double closeTrend[1], closePull[1];
+
+   // 確定足（1本目）で揃える。H4の200EMAは1本目と11本前（1本目から10本前）
+   if(CopyBuffer(hTrend, 0, 1, 1, emaTrendNow) != 1 ||
+      CopyBuffer(hTrend, 0, 11, 1, emaTrendOld) != 1 ||
+      CopyBuffer(hPull, 0, 1, 1, emaPullNow) != 1 ||
+      CopyBuffer(hAtr, 0, 1, 1, atrBuf) != 1)
+     {
+      return false;
+     }
+
+   // 終値（1本目）
+   closeTrend[0] = iClose(symbol, tfTrend, 1);
+   closePull[0]  = iClose(symbol, tfPull, 1);
+   if(closeTrend[0] <= 0.0 || closePull[0] <= 0.0)
+     {
+      return false;
+     }
+
+   double atr = atrBuf[0];
+   if(atr <= 0.0) return false;
+
+   // 50からスタート。ここから足し引きする
+   double score = 50.0;
+
+   // 1. H4の200EMAの向き
+   double slope = (emaTrendNow[0] - emaTrendOld[0]) / atr; // ATRで割って、銘柄・時間足で比べられるようにする
+   if(slope > 0.5)       score += 20.0; // 上向きが強い
+   else if(slope > 0.1)  score += 10.0; // 上向きが弱い
+   else if(slope < -0.5) score -= 20.0; // 下向きが強い
+   else if(slope < -0.1) score -= 10.0; // 下向きが弱い
+   // 横ばいなら、そのまま（50に近づく）
+
+   // 2. 価格とH4 200EMAの位置
+   double distTrend = (closeTrend[0] - emaTrendNow[0]) / atr;
+   if(distTrend > 0.0) score += 10.0; // H4のEMAの上
+   else                score -= 10.0; // H4のEMAの下
+
+   // 3. H1の押し目 / 戻り
+   double distPull = (closePull[0] - emaPullNow[0]) / atr;
+   // H4が上で、H1がEMAの下に潜る → 押し目買い
+   if(distTrend > 0.0 && distPull < 0.0) score += 15.0;
+   // H4が下で、H1がEMAの上に顔を出す → 戻り売り
+   if(distTrend < 0.0 && distPull > 0.0) score -= 15.0;
+
+   // 4. 200EMAからの距離
+   double ad = MathAbs(distTrend);
+   if(ad > 3.0)      score += 0.0; // 遠すぎる → もう押し目じゃない。足さない（50に寄る）
+   else if(ad > 1.5) score += 0.0; // ちょっと遠い
+   else if(ad > 0.5) score += 5.0; // ちょうどいい押し目 / 戻り
+   else              score += 0.0; // 張り付いてる → 分からない
+
+   // H4とH1が割れてたら、50に寄せる（分からない）
+   if((distTrend > 0.0 && distPull < -1.0) || (distTrend < 0.0 && distPull > 1.0))
+     {
+      // 割れが大きいほど、50に寄せる
+      // 今はそのまま。上の +15 / -15 で、すでに割れを表してるから
+     }
+
+   // 5〜95に収める。0や100にはしない（絶対はないから）
+   if(score < 5.0)  score = 5.0;
+   if(score > 95.0) score = 95.0;
+
+   pushPct = score;        // 押し目買い %
+   pullPct = 100.0 - score; // 戻り売り %
+   return true;
+  }
+//+------------------------------------------------------------------+
+// 押し目買い % / 戻り売り % を、もう計算済みの EMA結果から出す
+// 新しく iMA を作らない。だから失敗しない
+bool EMA_PullbackPctFromAlign(const EMA_ALIGN_Result &r, double &pushPct, double &pullPct)
+  {
+   pushPct = 50.0;
+   pullPct = 50.0;
+   if(!r.ready) return false;
+   if(r.atrH4 <= 0.0) return false;
+
+   double score = 50.0;
+
+   // 1. H4の200EMAの向き（もう計算済みの slopeH4 を使う）
+   if(r.slopeH4 > 0)      score += 20.0;
+   else if(r.slopeH4 < 0) score -= 20.0;
+
+   // 2. 価格とH4 200EMAの位置（もう計算済みの pricePosH4 を使う）
+   if(r.pricePosH4 > 0)      score += 10.0; // H4のEMAの上
+   else if(r.pricePosH4 < 0) score -= 10.0; // H4のEMAの下
+
+   // 3. H1の押し目 / 戻り（もう計算済みの pricePos を使う）
+   // H4の上で、H1がEMAの下 → 押し目買い
+   if(r.pricePosH4 > 0 && r.pricePos < 0) score += 15.0;
+   // H4の下で、H1がEMAの上 → 戻り売り
+   if(r.pricePosH4 < 0 && r.pricePos > 0) score -= 15.0;
+
+   // 4. 200EMAからの距離（もう計算済みの distH4 / atrH4 を使う）
+   double ad = (r.atrH4 > 0.0) ? (r.distH4 / r.atrH4) : 99.0;
+   if(ad <= 1.5 && ad >= 0.3) score += 5.0; // ちょうどいい押し目 / 戻り
+
+   // 5〜95に収める
+   if(score < 5.0)  score = 5.0;
+   if(score > 95.0) score = 95.0;
+
+   pushPct = score;
+   pullPct = 100.0 - score;
+   return true;
   }
