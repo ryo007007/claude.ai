@@ -744,7 +744,11 @@ int OnInit()
    ArrayResize(g_lastOutcomeTime, g_scanTotal);
    ArrayResize(g_emaAlign, g_symbolCount); // symbol分だけ
    for(int si0 = 0; si0 < g_symbolCount; si0++)
-    ZeroMemory(g_emaAlign[si0]); // ← ゴミを消す。ready=false, eqs=0 になる
+     {
+      ZeroMemory(g_emaAlign[si0]); // ← ゴミを消す。ready=false, eqs=0 になる
+      // 3. 前の数字があれば、すぐ、出す。無ければ、ダッシュのまま
+      EMA_AlignLoadGV(g_symbols[si0], g_emaAlign[si0]);
+     }
    
    for(int tk = 0; tk < g_scanTotal; tk++)
      {
@@ -996,13 +1000,13 @@ if(InpEMAAlignEnable)
                     InpEMAAlignSlopeBarsShort, InpEMAAlignSlopeBarsMed, InpEMAAlignSlopeBarsLong,
                     InpEMAAlignUseD1, InpEMAAlignUseH4, InpEMAAlignUseM15,
                     tmp))
-      {
-        g_emaAlign[si] = tmp;
-        PrintFormat("[EMA-DBG] %s ok ready=%d dir=%d pricePos=%d distH4=%.5f atrH4=%.5f eqs=%d",
-               g_symbols[si], (int)tmp.ready, tmp.dir, tmp.pricePos, tmp.distH4, tmp.atrH4, tmp.eqs);
-      }
-    else
-       PrintFormat("[EMA-DBG] %s FAIL ready=%d dir=%d", g_symbols[si], (int)tmp.ready, tmp.dir);
+        {
+         g_emaAlign[si] = tmp;
+         EMA_AlignSaveGV(g_symbols[si], tmp); // ← これを足す
+         PrintFormat("[EMA-DBG] %s ok ready=%d dir=%d pricePos=%d distH4=%.5f atrH4=%.5f eqs=%d",
+                g_symbols[si], (int)tmp.ready, tmp.dir, tmp.pricePos, tmp.distH4, tmp.atrH4, tmp.eqs);
+        }
+      // 失敗したら、何もしない → 前の数字が、残る
      }
   }
    

@@ -69,6 +69,48 @@ void EMA_AlignRelease()
    ArrayResize(g_emaHandles, 0);
   }
 
+
+//+------------------------------------------------------------------+
+//| 3. 前の数字を、GlobalVariable に、保存する / 読み込む              |
+//| 切り替えても、前の数字を、すぐ出すため                             |
+//+------------------------------------------------------------------+
+string EMA_AlignGVKey(const string symbol, const string field)
+  {
+   return "CCOMP_EMA_" + symbol + "_" + field;
+  }
+
+void EMA_AlignSaveGV(const string symbol, const EMA_ALIGN_Result &r)
+  {
+   if(!r.ready) return;
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "READY"), 1.0);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "SLOPEH4"), (double)r.slopeH4);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "POSH4"), (double)r.pricePosH4);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "POS"), (double)r.pricePos);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "DISTH4"), r.distH4);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "ATRH4"), r.atrH4);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "DIR"), (double)r.dir);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "EQS"), (double)r.eqs);
+   GlobalVariableSet(EMA_AlignGVKey(symbol, "TIME"), (double)TimeCurrent());
+  }
+
+bool EMA_AlignLoadGV(const string symbol, EMA_ALIGN_Result &r)
+  {
+   string key = EMA_AlignGVKey(symbol, "READY");
+   if(!GlobalVariableCheck(key)) return false;
+   if(GlobalVariableGet(key) < 0.5) return false;
+
+   ZeroMemory(r);
+   r.ready = true;
+   r.slopeH4 = (int)GlobalVariableGet(EMA_AlignGVKey(symbol, "SLOPEH4"));
+   r.pricePosH4 = (int)GlobalVariableGet(EMA_AlignGVKey(symbol, "POSH4"));
+   r.pricePos = (int)GlobalVariableGet(EMA_AlignGVKey(symbol, "POS"));
+   r.distH4 = GlobalVariableGet(EMA_AlignGVKey(symbol, "DISTH4"));
+   r.atrH4 = GlobalVariableGet(EMA_AlignGVKey(symbol, "ATRH4"));
+   r.dir = (int)GlobalVariableGet(EMA_AlignGVKey(symbol, "DIR"));
+   r.eqs = (int)GlobalVariableGet(EMA_AlignGVKey(symbol, "EQS"));
+   return true;
+  }
+
 //+------------------------------------------------------------------+
 bool EMA_GetValue(const int handle, const int shift, double &out)
   {
@@ -86,6 +128,9 @@ int EMA_AlignHandleIndex(const string symbol, const int emaPeriod,
    for(int i = 0; i < ArraySize(g_emaHandles); i++)
       if(g_emaHandles[i].symbol == symbol)
         {
+         SymbolSelect(symbol, true); // 気配値に出す（2回目以降も呼んでOK）
+         if(g_emaHandles[i].hH1 <= 0) // ← これを足す
+            g_emaHandles[i].hH1 = iMA(symbol, PERIOD_H1, emaPeriod, 0, MODE_EMA, PRICE_CLOSE);
          if(useH4 && g_emaHandles[i].hH4 <= 0)
             g_emaHandles[i].hH4 = iMA(symbol, PERIOD_H4, emaPeriod, 0, MODE_EMA, PRICE_CLOSE);
          if(useH4 && g_emaHandles[i].hATRH4 <= 0)
@@ -109,6 +154,35 @@ int EMA_AlignHandleIndex(const string symbol, const int emaPeriod,
    g_emaHandles[idx].hATRH4  = useH4  ? iATR(symbol, PERIOD_H4, 14) : 0;
    g_emaHandlePeriod = emaPeriod;
    return idx;
+  }
+
+//+------------------------------------------------------------------+
+//| 終値から、EMA を、手計算する。ハンドルは、使わない               |
+//| shift = 1 なら、確定足の EMA。shift = 11 なら、11本前の EMA       |
+//+------------------------------------------------------------------+
+bool EMA_ValueFromClose(const string symbol, const ENUM_TIMEFRAMES tf,
+                        const int emaPeriod, const int shift, double &out)
+  {
+   out = 0.0;
+   // shift + emaPeriod + 50本分、取る。足りなければ、失敗
+   int need = shift + emaPeriod + 50;
+   double close[];
+   ArraySetAsSeries(close, true);
+   if(CopyClose(symbol, tf, 0, need, close) != need) return false;
+
+   // 一番古いところから、EMA を、作る
+   double k = 2.0 / (emaPeriod + 1.0);
+   double ema = close[need - 1];
+   for(int i = need - 2; i >= shift; i--)
+     {
+      ema = close[i] * k + ema * (1.0 - k);
+      if(i == shift)
+        {
+         out = ema;
+         return true;
+        }
+     }
+   return false;
   }
 
 //+------------------------------------------------------------------+
@@ -285,24 +359,25 @@ bool EMA_AlignCompute(const string symbol, const int emaPeriod,
 
    if(useH4)
      {
-      if(!EMA_GetValue(g_emaHandles[hi].hH4, shiftNow, h4Now)) return false;
-      if(!EMA_GetValue(g_emaHandles[hi].hH4, shiftShort, h4Short)) return false;
-      if(!EMA_GetValue(g_emaHandles[hi].hH4, shiftMed, h4Med)) return false;
-      if(!EMA_GetValue(g_emaHandles[hi].hH4, shiftLong, h4Long)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_H4, emaPeriod, shiftNow, h4Now)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_H4, emaPeriod, shiftShort, h4Short)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_H4, emaPeriod, shiftMed, h4Med)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_H4, emaPeriod, shiftLong, h4Long)) return false;
+      // ATR だけは、ハンドルのまま。ATR は、1本だけだから、安定する
       if(!EMA_GetValue(g_emaHandles[hi].hATRH4, shiftNow, atrH4)) return false;
      }
-   if(!EMA_GetValue(g_emaHandles[hi].hH1, shiftNow, h1Now)) return false;
-   if(!EMA_GetValue(g_emaHandles[hi].hH1, shiftShort, h1Short)) return false;
+   if(!EMA_ValueFromClose(symbol, PERIOD_H1, emaPeriod, shiftNow, h1Now)) return false;
+   if(!EMA_ValueFromClose(symbol, PERIOD_H1, emaPeriod, shiftShort, h1Short)) return false;
 
    if(useM15)
      {
-      if(!EMA_GetValue(g_emaHandles[hi].hM15, shiftNow, m15Now)) return false;
-      if(!EMA_GetValue(g_emaHandles[hi].hM15, shiftShort, m15Short)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_M15, emaPeriod, shiftNow, m15Now)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_M15, emaPeriod, shiftShort, m15Short)) return false;
      }
    if(useD1)
      {
-      if(!EMA_GetValue(g_emaHandles[hi].hD1, shiftNow, d1Now)) return false;
-      if(!EMA_GetValue(g_emaHandles[hi].hD1, shiftShort, d1Short)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_D1, emaPeriod, shiftNow, d1Now)) return false;
+      if(!EMA_ValueFromClose(symbol, PERIOD_D1, emaPeriod, shiftShort, d1Short)) return false;
      }
 
    double close1 = iClose(symbol, PERIOD_H1, 1);
