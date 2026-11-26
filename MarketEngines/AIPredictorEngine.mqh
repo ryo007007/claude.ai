@@ -10,7 +10,7 @@
 //--- 入力グループ
 input group "=== AI予測エンジン ==="
 input bool   AI_Enable          = true;   // AI予測を有効にする
-input int    AI_MinConfidence   = 50;     // 一覧に表示する最低信頼度(%)
+input int    AI_MinConfidence   = 40;     // 一覧に表示する最低信頼度(%)
 input int    AI_HighConfidence  = 80;     // 高信頼度とみなす閾値(%)
 input bool   AI_AlertOnHighConf = true;   // 高信頼度でアラート
 input bool   AI_LogToSLG        = true;   // SignalLoggerに記録

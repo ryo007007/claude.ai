@@ -933,6 +933,14 @@ void DrawRow(const int r, const string text, const color clr)
       ObjectSetInteger(0, name, OBJPROP_BACK, false);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+     
+     if(ArraySize(g_lastRowText) <= r)
+        {
+         ArrayResize(g_lastRowText, r + 1);
+         ArrayResize(g_lastRowColor, r + 1);
+        }
+      g_lastRowText[r] = "";
+      g_lastRowColor[r] = clrNONE;
      }
 
    // 同じ文字なら書き換えない。チカチカの原因はここ
@@ -949,7 +957,7 @@ void DrawRow(const int r, const string text, const color clr)
    g_lastRowColor[r] = clr;
 
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PanelX);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY + 18 + r * 15);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY + 16 + r * 15);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
   }
@@ -1660,17 +1668,17 @@ if(InpEMAAlignEnable)
          line += StringFormat("（押し%.0f%%戻し%.0f%%）", push, pull);
       else
          line += "（押し-戻し-）";
-     }   
-
-      // AI予測を追加
-      string feat = StringFormat("score=%d;delta=%d", inst.score, inst.delta);
-      AI_UpdateRow(idx, kind, line, rowClr, feat);
-
-      DrawRow(r, line, rowClr);
-
-      g_rowSymbol[r] = inst.symbol;
-      g_rowTF[r]     = inst.tf;
      }
+
+     // AI予測を追加
+     string feat = StringFormat("score=%d;delta=%d", inst.score, inst.delta);
+     AI_UpdateRow(idx, kind, line, rowClr, feat);
+
+     DrawRow(r, line, rowClr);
+
+     g_rowSymbol[r] = inst.symbol;
+     g_rowTF[r]     = inst.tf;
+     }  
 
 // 余った行を削除する（40件→10件に減ったとき、11行目〜40行目が残るのを防ぐ）
    for(int r = shown; r < MaxRows; r++)
