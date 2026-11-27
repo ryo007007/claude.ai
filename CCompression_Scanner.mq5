@@ -1665,7 +1665,7 @@ if(InpEMAAlignEnable)
       int siEMA = idx / g_tfCount;
       bool emaOk = (siEMA >= 0 && siEMA < g_symbolCount && g_emaAlign[siEMA].ready);
       if(emaOk && EMA_PullbackPctFromAlign(g_emaAlign[siEMA], push, pull))
-         line += StringFormat("（押し%.0f%%戻し%.0f%%）", push, pull);
+         line += StringFormat("（押%.0f戻%.0f）", push, pull);
       else
          line += "（押し-戻し-）";
      }
@@ -1708,7 +1708,7 @@ if(InpEMAAlignEnable)
       ObjectSetInteger(0, moreName, OBJPROP_XDISTANCE, PanelX);
       ObjectSetInteger(0, moreName, OBJPROP_YDISTANCE, PanelY + 18 + shown * 14);
       ObjectSetString(0, moreName, OBJPROP_TEXT, StringFormat("...他 %d件", n - pageEnd));
-      ObjectSetInteger(0, moreName, OBJPROP_COLOR, clrGray);
+      ObjectSetInteger(0, moreName, OBJPROP_COLOR, clrWheat);
      }
    else
       ObjectDelete(0, "CCOMP_Scan_More");
@@ -2022,7 +2022,7 @@ void SetDetailLine(const int j, const int total, const string text, const color 
    if(lower) anchor = right ? ANCHOR_RIGHT_LOWER : ANCHOR_LEFT_LOWER;
    else      anchor = right ? ANCHOR_RIGHT_UPPER : ANCHOR_LEFT_UPPER;
 
-   int lineH = 16;
+   int lineH = 14;
    int y = lower ? DetailY + (total - 1 - j) * lineH : DetailY + j * lineH;
 
    ObjectSetInteger(0, name, OBJPROP_CORNER, DetailCorner);
@@ -2042,8 +2042,8 @@ void DrawDetailPanel()
       return;
      }
 
-   string lines[60];
-   color  clrs[60];
+   string lines[80];
+   color  clrs[80];
    int    L = 0;
 
    ENUM_TIMEFRAMES curTF = (ENUM_TIMEFRAMES)_Period;
@@ -2057,12 +2057,12 @@ void DrawDetailPanel()
    if(idx < 0)
      {
       lines[L] = StringFormat("【解説】%s %s は監視対象外です（時間足の選択ONを確認してください）", _Symbol, tfName);
-      clrs[L]  = clrGray; L++;
+      clrs[L]  = clrWheat; L++;
      }
    else if(!g_scan[idx].ready)
      {
       lines[L] = StringFormat("【解説】%s %s 計算中...", _Symbol, tfName);
-      clrs[L]  = clrGray; L++;
+      clrs[L]  = clrWheat; L++;
      }
    else
      {
@@ -2225,7 +2225,7 @@ void DrawDetailPanel()
             string alignTxt = (ea.dir > 0 ? " → 押し目条件成立" : (ea.dir < 0 ? " → 戻り条件成立" : " → 条件なし"));
             lines[L] = StringFormat("  [EMAアライメント v2.0] H4 %s / H1 %s / 価格は%s%s",
                                     h4Txt, h1Txt, posTxt, alignTxt);
-            clrs[L] = (ea.dir != 0 ? CCOMP_StateColor(inst.state) : base); L++;
+            clrs[L] = (ea.dir != 0 ? clrAqua : clrWheat); L++;
 
             if(ea.dir != 0)
               {
@@ -2248,7 +2248,7 @@ void DrawDetailPanel()
                bool d1Filter = (ea.slopeD1 != 0 && ea.slopeD1 != (InpEMAAlignUseH4 ? ea.slopeH4 : ea.slopeH1));
                lines[L] = StringFormat("    [EMA200 日足] %s%s", d1Txt,
                                        d1Filter ? " → トレンド方向不一致でフィルタ適用中" : "");
-               clrs[L] = d1Filter ? clrGray : base; L++;
+               clrs[L] = d1Filter ? clrAqua : base; L++;
               }
 
             if(InpEMAAlignUseM15)
@@ -2277,7 +2277,7 @@ void DrawDetailPanel()
                 lines[L] = StringFormat("    押し目買い %.0f%% / 戻り売り %.0f%%", pushD, pullD);
              else
                 lines[L] = "    押し目買い - / 戻り売り -（計算未完了）";
-             clrs[L] = base; L++;
+             clrs[L] = clrYellow; L++;
             }
            }
          else
@@ -2286,6 +2286,32 @@ void DrawDetailPanel()
             clrs[L] = base; L++;
            }
         }
+
+      // 一覧の短い表記の解説：押し戻し / EQS / 連鎖
+      {
+       int cascadeD = CascadeCount(inst.symbol);
+       if(cascadeD >= 2)
+          lines[L] = StringFormat("  [連鎖] %d足で圧縮中：同じ通貨で、%d個の時間足が、同時に圧縮しています", cascadeD, cascadeD);
+       else
+          lines[L] = "  [連鎖] なし：この通貨で、圧縮しているのは、この時間足だけです";
+       clrs[L] = base; L++;
+
+       int siED = -1;
+       for(int s = 0; s < g_symbolCount; s++)
+          if(g_symbols[s] == inst.symbol) { siED = s; break; }
+       if(siED >= 0 && g_emaAlign[siED].ready)
+          lines[L] = StringFormat("  [EQS] %d/100：エントリーの形の点数です。確率ではありません。高いほど、トレンド・深さ・揃い方が、きれいです", g_emaAlign[siED].eqs);
+       else
+          lines[L] = "  [EQS] -：EMAの計算が、まだ、終わってません";
+       clrs[L] = base; L++;
+
+       double pushD2 = 50.0, pullD2 = 50.0;
+       if(siED >= 0 && siED < g_symbolCount && EMA_PullbackPctFromAlign(g_emaAlign[siED], pushD2, pullD2))
+          lines[L] = StringFormat("  [押し戻し] 一覧の（押%.0f/%.0f）は、押し目買い %.0f%% / 戻り売り %.0f%% の、短い書き方です", pushD2, pullD2, pushD2, pullD2);
+       else
+          lines[L] = "  [押し戻し] 一覧の（押し-戻し-）は、まだ、計算できてません";
+       clrs[L] = base; L++;
+      }
 
       string evNext = (evD.minToNext >= 0)
          ? StringFormat("%s %s(重要度%d) %d分後", evD.nextCur, evD.nextName, evD.nextImp, evD.minToNext)
@@ -2467,7 +2493,7 @@ void DrawDetailPanel()
       else if(UseSpikeOverride && g_suppressed[idx])
         {
          lines[L] = "  急変により圧縮表示を解除中（圧縮がNORMALに戻るまで一覧には出ません）";
-         clrs[L]  = clrGray; L++;
+         clrs[L]  = clrWheat; L++;
         }
      }
 
@@ -2486,6 +2512,31 @@ void DrawDetailPanel()
          L++;
         }
      }
+
+   // 凡例：一覧の短い表記の意味
+   lines[L] = "  [凡例] Vol↑=出来高が平均より多い / Vol↓=少ない / Vol→=普通";
+   clrs[L] = clrWheat; L++;
+
+   lines[L] = "  [凡例] TTM SQZ中=BB幅がKeltner内に収まって圧縮中 / SQZ解除=圧縮が解けて動き出した";
+   clrs[L] = clrWheat; L++;
+
+   lines[L] = "  [凡例] RSIダイバージェンス=価格とRSIの向きが逆。反転の兆し";
+   clrs[L] = clrWheat; L++;
+
+   lines[L] = "  [凡例] ST=Supertrendの線。価格が線より上なら上昇、下なら下降";
+   clrs[L] = clrWheat; L++;
+
+   lines[L] = "  [凡例] DON=Donchian。上ブレイク=直近の高値を抜けた / 下ブレイク=安値を抜けた";
+   clrs[L] = clrWheat; L++;
+
+   lines[L] = "  [凡例] (浅戻り)=EMAまでの戻りが浅い / (深押し)=EMAまでの押しが深い。ゾーンの位置です";
+   clrs[L] = clrWheat; L++;
+
+   lines[L] = "  [凡例] ↗=買いダイバージェンス / ↘=売りダイバージェンス。価格とEMAの向きが逆";
+   clrs[L] = clrWheat; L++;
+
+   lines[L] = "  [凡例] AI 〇% / EQS 〇点 = 確率ではありません。形が、どれだけ揃ってるかの点数です";
+   clrs[L] = clrWheat; L++;
 
    // 損切り・利確ゾーン (詳細パネル)
    if(g_exit.ready)
@@ -2516,7 +2567,7 @@ void DrawUiButton(const string name, const int x, const string text, const color
       ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
       ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
-      ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, clrGray);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, clrWheat);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
      }
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
@@ -2580,9 +2631,9 @@ void DrawStatsPanel()
      {
       string name = "CCOMP_Scan_Stat_" + IntegerToString(j);
       string text;
-      color  clr = clrSilver;
+      color  clr = clrWheat;
       if(j == 0)       { text = head; clr = clrWhite; }
-      else if(n == 0)  { text = "  (評価済みのデータはまだありません)"; clr = clrGray; }
+      else if(n == 0)  { text = "  (評価済みのデータはまだありません)"; clr = clrWheat; }
       else             text = "  " + lines[j - 1];
 
       if(ObjectFind(0, name) < 0)
@@ -2675,7 +2726,7 @@ void DrawWickPanel()
    ObjectSetString(0, btnClear, OBJPROP_TEXT, btnText);
    ObjectSetInteger(0, btnClear, OBJPROP_BGCOLOR, g_wickHL_On ? clrDarkSlateGray : clrDimGray);
    ObjectSetInteger(0, btnClear, OBJPROP_COLOR, clrWhite);
-   ObjectSetInteger(0, btnClear, OBJPROP_BORDER_COLOR, clrGray);
+   ObjectSetInteger(0, btnClear, OBJPROP_BORDER_COLOR, clrWheat);
    ObjectSetInteger(0, btnClear, OBJPROP_STATE, false);
 
    string titleName = "CCOMP_Wick_Title";

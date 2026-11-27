@@ -289,9 +289,7 @@ bool AI_UpdateRow(const int idx, const int kind, string &io_line, color &io_rowC
       g_LastAIPreds[idx]  = aiPred;
      }
 
-   if(aiPred.confidence >= AI_MinConfidence)
       io_line += StringFormat(" AI%s%.0f", AI_DirMark(aiPred.direction), aiPred.confidence);
-      io_line += " AI━";
 
    if(aiPred.confidence >= AI_HighConfidence && aiPred.direction != 0)
      {
